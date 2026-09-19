@@ -1,29 +1,136 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TurnCue</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f5f5f5;
+      color: #1f1f1f;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      padding: 24px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 420px;
+      background: white;
+      border-radius: 24px;
+      padding: 40px 28px;
+      text-align: center;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
+    }
+
+    .logo {
+      font-size: 36px;
+      margin-bottom: 8px;
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: 32px;
+    }
+
+    .tagline {
+      font-size: 18px;
+      line-height: 1.5;
+      color: #555;
+      margin-bottom: 32px;
+    }
+
+    button {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      padding: 16px;
+      font-size: 17px;
+      font-weight: bold;
+      cursor: pointer;
+      background: #1f1f1f;
+      color: white;
+    }
+
+    button:hover {
+      opacity: 0.9;
+    }
+
+    #status {
+      display: none;
+    }
+
+    .position {
+      font-size: 64px;
+      font-weight: bold;
+      margin: 18px 0 8px;
+    }
+
+    .ahead {
+      font-size: 18px;
+      margin-bottom: 28px;
+    }
+
+    .message {
+      font-size: 17px;
+      line-height: 1.5;
+      color: #555;
+    }
+  </style>
 </head>
 
 <body>
 
-  <h1>🔔 TurnCue</h1>
+  <div class="app">
+    <div class="card">
 
-  <p>Don't wait around.<br>We'll cue you.</p>
+      <div class="logo">🔔</div>
 
-  <button onclick="joinQueue()">JOIN QUEUE</button>
+      <div id="joinScreen">
+        <h1>TurnCue</h1>
 
-  <div id="status"></div>
+        <p class="tagline">
+          Don't wait around.<br>
+          We'll cue you.
+        </p>
+
+        <button onclick="joinQueue()">JOIN QUEUE</button>
+      </div>
+
+      <div id="status">
+        <h1>You're in!</h1>
+
+        <div class="position">#5</div>
+
+        <div class="ahead">
+          4 people ahead of you
+        </div>
+
+        <div class="message">
+          You can walk away.<br>
+          We'll cue you when you're close.
+        </div>
+      </div>
+
+    </div>
+  </div>
 
   <script>
     function joinQueue() {
-      document.getElementById("status").innerHTML = `
-        <h2>You're in!</h2>
-        <h1>#5</h1>
-        <p>4 people ahead of you</p>
-        <p>You can walk away.<br>We'll cue you when you're close.</p>
-      `;
+      document.getElementById("joinScreen").style.display = "none";
+      document.getElementById("status").style.display = "block";
     }
   </script>
 
