@@ -124,11 +124,9 @@
       <div id="status">
         <h1>You're in!</h1>
 
-        <div class="position" id="position">#1</div>
+        <div class="position" id="position"></div>
 
-        <div class="ahead" id="ahead">
-          You're first in line
-        </div>
+        <div class="ahead" id="ahead"></div>
 
         <div class="message">
           You can walk away.<br>
@@ -148,7 +146,11 @@
       getFirestore,
       collection,
       addDoc,
-      serverTimestamp
+      serverTimestamp,
+      query,
+      where,
+      orderBy,
+      getDocs
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -172,10 +174,46 @@
 
       try {
 
-        await addDoc(collection(db, "queue"), {
+        const myEntry = await addDoc(collection(db, "queue"), {
           status: "waiting",
           joinedAt: serverTimestamp()
         });
+
+        const queueQuery = query(
+          collection(db, "queue"),
+          where("status", "==", "waiting"),
+          orderBy("joinedAt", "asc")
+        );
+
+        const snapshot = await getDocs(queueQuery);
+
+        let myPosition = 0;
+
+        snapshot.docs.forEach((doc, index) => {
+          if (doc.id === myEntry.id) {
+            myPosition = index + 1;
+          }
+        });
+
+        if (myPosition === 0) {
+          throw new Error("Could not determine queue position.");
+        }
+
+        document.getElementById("position").textContent =
+          "#" + myPosition;
+
+        const peopleAhead = myPosition - 1;
+
+        if (peopleAhead === 0) {
+          document.getElementById("ahead").textContent =
+            "You're first in line";
+        } else if (peopleAhead === 1) {
+          document.getElementById("ahead").textContent =
+            "1 person ahead of you";
+        } else {
+          document.getElementById("ahead").textContent =
+            peopleAhead + " people ahead of you";
+        }
 
         document.getElementById("joinScreen").style.display = "none";
         document.getElementById("status").style.display = "block";
