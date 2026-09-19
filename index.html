@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <title>TurnCue</title>
 
   <style>
@@ -20,8 +21,8 @@
     .app {
       min-height: 100vh;
       display: flex;
-      justify-content: center;
       align-items: center;
+      justify-content: center;
       padding: 24px;
     }
 
@@ -30,33 +31,34 @@
       max-width: 420px;
       background: white;
       border-radius: 24px;
-      padding: 40px 28px;
+      padding: 36px 28px;
       text-align: center;
       box-shadow: 0 8px 30px rgba(0,0,0,0.08);
     }
 
-    .logo {
-      font-size: 36px;
-      margin-bottom: 8px;
+    .bell {
+      font-size: 48px;
+      margin-bottom: 12px;
     }
 
     h1 {
-      margin: 0 0 12px;
-      font-size: 32px;
+      margin: 0;
+      font-size: 36px;
     }
 
     .tagline {
-      font-size: 18px;
+      margin-top: 10px;
+      color: #666;
+      font-size: 17px;
       line-height: 1.5;
-      color: #555;
-      margin-bottom: 32px;
     }
 
-    button {
+    #joinButton {
       width: 100%;
+      margin-top: 30px;
       border: none;
       border-radius: 14px;
-      padding: 16px;
+      padding: 17px;
       font-size: 17px;
       font-weight: bold;
       cursor: pointer;
@@ -64,37 +66,57 @@
       color: white;
     }
 
-    button:disabled {
-      opacity: 0.6;
+    #joinButton:disabled {
+      opacity: 0.5;
       cursor: default;
     }
 
-    #status {
+    #queueScreen {
       display: none;
     }
 
-    .position {
-      font-size: 64px;
-      font-weight: bold;
-      margin: 18px 0 8px;
-    }
-
-    .ahead {
+    .youre-in {
       font-size: 18px;
-      margin-bottom: 28px;
+      margin-bottom: 8px;
     }
 
-    .message {
+    #position {
+      font-size: 72px;
+      font-weight: bold;
+      margin: 10px 0;
+    }
+
+    #ahead {
+      font-size: 18px;
+      margin-bottom: 24px;
+    }
+
+    .walk-away {
+      color: #666;
       font-size: 17px;
       line-height: 1.5;
-      color: #555;
     }
 
-    #errorMessage {
+    #calledMessage {
       display: none;
-      margin-top: 18px;
+    }
+
+    .called-title {
+      font-size: 34px;
+      font-weight: bold;
+      margin: 18px 0 10px;
+    }
+
+    .called-text {
+      color: #555;
+      font-size: 18px;
+      line-height: 1.5;
+    }
+
+    .error {
       color: #b00020;
-      font-size: 14px;
+      margin-top: 18px;
+      font-size: 15px;
     }
   </style>
 </head>
@@ -102,40 +124,75 @@
 <body>
 
   <div class="app">
+
     <div class="card">
 
-      <div class="logo">🔔</div>
-
       <div id="joinScreen">
+
+        <div class="bell">🔔</div>
+
         <h1>TurnCue</h1>
 
-        <p class="tagline">
+        <div class="tagline">
           Don't wait around.<br>
           We'll cue you.
-        </p>
-
-        <button id="joinButton">JOIN QUEUE</button>
-
-        <div id="errorMessage">
-          Something went wrong. Please try again.
         </div>
+
+        <button id="joinButton">
+          JOIN QUEUE
+        </button>
+
+        <div id="errorMessage" class="error"></div>
+
       </div>
 
-      <div id="status">
-        <h1>You're in!</h1>
 
-        <div class="position" id="position"></div>
+      <div id="queueScreen">
 
-        <div class="ahead" id="ahead"></div>
+        <div id="waitingMessage">
 
-        <div class="message">
-          You can walk away.<br>
-          We'll cue you when you're close.
+          <div class="bell">🔔</div>
+
+          <div class="youre-in">
+            You're in!
+          </div>
+
+          <div id="position">
+            #1
+          </div>
+
+          <div id="ahead">
+            You're first in line.
+          </div>
+
+          <div class="walk-away">
+            You can walk away.<br>
+            We'll keep your place.
+          </div>
+
         </div>
+
+
+        <div id="calledMessage">
+
+          <div class="bell">🔔</div>
+
+          <div class="called-title">
+            It's your turn!
+          </div>
+
+          <div class="called-text">
+            Please return now.
+          </div>
+
+        </div>
+
       </div>
 
     </div>
+
   </div>
+
 
   <script type="module">
 
@@ -150,8 +207,10 @@
       query,
       where,
       orderBy,
-      getDocs
+      onSnapshot,
+      doc
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+
 
     const firebaseConfig = {
       apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
@@ -162,73 +221,187 @@
       appId: "1:459437201769:web:1859490f3db0f3fc2945f8"
     };
 
+
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    const joinButton = document.getElementById("joinButton");
+
+    const joinButton =
+      document.getElementById("joinButton");
+
+    const joinScreen =
+      document.getElementById("joinScreen");
+
+    const queueScreen =
+      document.getElementById("queueScreen");
+
+    const waitingMessage =
+      document.getElementById("waitingMessage");
+
+    const calledMessage =
+      document.getElementById("calledMessage");
+
+    const position =
+      document.getElementById("position");
+
+    const ahead =
+      document.getElementById("ahead");
+
+    const errorMessage =
+      document.getElementById("errorMessage");
+
+
+    let myDocumentId = null;
+
 
     joinButton.addEventListener("click", async () => {
 
       joinButton.disabled = true;
       joinButton.textContent = "JOINING...";
+      errorMessage.textContent = "";
 
       try {
 
-        const myEntry = await addDoc(collection(db, "queue"), {
-          status: "waiting",
-          joinedAt: serverTimestamp()
-        });
-
-        const queueQuery = query(
+        const myDocument = await addDoc(
           collection(db, "queue"),
-          where("status", "==", "waiting"),
-          orderBy("joinedAt", "asc")
+          {
+            status: "waiting",
+            joinedAt: serverTimestamp()
+          }
         );
 
-        const snapshot = await getDocs(queueQuery);
+        myDocumentId = myDocument.id;
 
-        let myPosition = 0;
+        joinScreen.style.display = "none";
+        queueScreen.style.display = "block";
 
-        snapshot.docs.forEach((doc, index) => {
-          if (doc.id === myEntry.id) {
-            myPosition = index + 1;
-          }
-        });
-
-        if (myPosition === 0) {
-          throw new Error("Could not determine queue position.");
-        }
-
-        document.getElementById("position").textContent =
-          "#" + myPosition;
-
-        const peopleAhead = myPosition - 1;
-
-        if (peopleAhead === 0) {
-          document.getElementById("ahead").textContent =
-            "You're first in line";
-        } else if (peopleAhead === 1) {
-          document.getElementById("ahead").textContent =
-            "1 person ahead of you";
-        } else {
-          document.getElementById("ahead").textContent =
-            peopleAhead + " people ahead of you";
-        }
-
-        document.getElementById("joinScreen").style.display = "none";
-        document.getElementById("status").style.display = "block";
+        startQueueListener();
+        startStatusListener();
 
       } catch (error) {
 
-        console.error("Error joining queue:", error);
+        console.error("Join queue error:", error);
+
+        errorMessage.textContent =
+          "Something went wrong. Please try again.";
 
         joinButton.disabled = false;
         joinButton.textContent = "JOIN QUEUE";
-
-        document.getElementById("errorMessage").style.display = "block";
       }
 
     });
+
+
+    function startQueueListener() {
+
+      const queueQuery = query(
+        collection(db, "queue"),
+        where("status", "==", "waiting"),
+        orderBy("joinedAt", "asc")
+      );
+
+
+      onSnapshot(
+
+        queueQuery,
+
+        (snapshot) => {
+
+          if (!myDocumentId) {
+            return;
+          }
+
+          const myIndex =
+            snapshot.docs.findIndex(
+              customer => customer.id === myDocumentId
+            );
+
+
+          if (myIndex === -1) {
+            return;
+          }
+
+
+          const myPosition = myIndex + 1;
+
+          position.textContent =
+            "#" + myPosition;
+
+
+          if (myPosition === 1) {
+
+            ahead.textContent =
+              "You're first in line.";
+
+          } else if (myPosition === 2) {
+
+            ahead.textContent =
+              "1 person ahead of you.";
+
+          } else {
+
+            ahead.textContent =
+              (myPosition - 1) +
+              " people ahead of you.";
+
+          }
+
+        },
+
+        (error) => {
+          console.error(
+            "Queue listener error:",
+            error
+          );
+        }
+
+      );
+
+    }
+
+
+    function startStatusListener() {
+
+      const myDoc =
+        doc(db, "queue", myDocumentId);
+
+
+      onSnapshot(
+
+        myDoc,
+
+        (snapshot) => {
+
+          if (!snapshot.exists()) {
+            return;
+          }
+
+
+          const data = snapshot.data();
+
+
+          if (data.status === "called") {
+
+            waitingMessage.style.display =
+              "none";
+
+            calledMessage.style.display =
+              "block";
+
+          }
+
+        },
+
+        (error) => {
+          console.error(
+            "Status listener error:",
+            error
+          );
+        }
+
+      );
+
+    }
 
   </script>
 
