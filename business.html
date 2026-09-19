@@ -51,6 +51,7 @@
       background: white;
       border-radius: 20px;
       padding: 24px;
+      margin-bottom: 20px;
       box-shadow: 0 8px 30px rgba(0,0,0,0.08);
     }
 
@@ -66,7 +67,7 @@
       font-size: 22px;
     }
 
-    #count {
+    .count {
       color: #666;
       font-size: 15px;
     }
@@ -74,8 +75,14 @@
     .queue-item {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       padding: 18px 0;
       border-top: 1px solid #eee;
+    }
+
+    .person-info {
+      display: flex;
+      align-items: center;
     }
 
     .number {
@@ -116,6 +123,17 @@
       opacity: 0.4;
       cursor: default;
     }
+
+    .complete-button {
+      border: none;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      background: #1f1f1f;
+      color: white;
+    }
   </style>
 </head>
 
@@ -134,15 +152,28 @@
 
         <div class="queue-title">
           <h2>Waiting</h2>
-          <div id="count">0 waiting</div>
+          <div id="waitingCount" class="count">0 waiting</div>
         </div>
 
         <button id="callNextButton" disabled>
           CALL NEXT
         </button>
 
-        <div id="queueList">
+        <div id="waitingList">
           <div class="empty">No one is waiting.</div>
+        </div>
+
+      </div>
+
+      <div class="queue-card">
+
+        <div class="queue-title">
+          <h2>Called</h2>
+          <div id="calledCount" class="count">0 called</div>
+        </div>
+
+        <div id="calledList">
+          <div class="empty">No one has been called.</div>
         </div>
 
       </div>
@@ -163,7 +194,8 @@
       orderBy,
       onSnapshot,
       doc,
-      updateDoc
+      updateDoc,
+      serverTimestamp
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -178,93 +210,233 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
-    const queueList = document.getElementById("queueList");
-    const count = document.getElementById("count");
-    const callNextButton = document.getElementById("callNextButton");
+    const waitingList =
+      document.getElementById("waitingList");
+
+    const waitingCount =
+      document.getElementById("waitingCount");
+
+    const calledList =
+      document.getElementById("calledList");
+
+    const calledCount =
+      document.getElementById("calledCount");
+
+    const callNextButton =
+      document.getElementById("callNextButton");
 
     let waitingCustomers = [];
 
-    const queueQuery = query(
+    const waitingQuery = query(
       collection(db, "queue"),
       where("status", "==", "waiting"),
       orderBy("joinedAt", "asc")
     );
 
+    const calledQuery = query(
+      collection(db, "queue"),
+      where("status", "==", "called"),
+      orderBy("calledAt", "asc")
+    );
+
     onSnapshot(
-      queueQuery,
+      waitingQuery,
 
       (snapshot) => {
 
         waitingCustomers = snapshot.docs;
 
-        queueList.innerHTML = "";
+        waitingList.innerHTML = "";
 
-        count.textContent =
+        waitingCount.textContent =
           snapshot.size + " waiting";
 
-        callNextButton.disabled = snapshot.empty;
+        callNextButton.disabled =
+          snapshot.empty;
 
         if (snapshot.empty) {
-          queueList.innerHTML =
+          waitingList.innerHTML =
             '<div class="empty">No one is waiting.</div>';
           return;
         }
 
         snapshot.docs.forEach((customer, index) => {
 
-          const item = document.createElement("div");
+          const item =
+            document.createElement("div");
+
           item.className = "queue-item";
 
-          const number = document.createElement("div");
+          const personInfo =
+            document.createElement("div");
+
+          personInfo.className = "person-info";
+
+          const number =
+            document.createElement("div");
+
           number.className = "number";
           number.textContent = "#" + (index + 1);
 
-          const status = document.createElement("div");
+          const status =
+            document.createElement("div");
+
           status.className = "status";
           status.textContent = "Waiting";
 
-          item.appendChild(number);
-          item.appendChild(status);
+          personInfo.appendChild(number);
+          personInfo.appendChild(status);
 
-          queueList.appendChild(item);
+          item.appendChild(personInfo);
+
+          waitingList.appendChild(item);
         });
+
       },
 
       (error) => {
-        console.error("Queue listener error:", error);
 
-        queueList.innerHTML =
-          '<div class="error">Unable to load queue.</div>';
+        console.error(
+          "Waiting queue error:",
+          error
+        );
+
+        waitingList.innerHTML =
+          '<div class="error">Unable to load waiting queue.</div>';
       }
     );
 
-    callNextButton.addEventListener("click", async () => {
+    onSnapshot(
+      calledQuery,
 
-      if (waitingCustomers.length === 0) {
-        return;
-      }
+      (snapshot) => {
 
-      callNextButton.disabled = true;
+        calledList.innerHTML = "";
 
-      try {
+        calledCount.textContent =
+          snapshot.size + " called";
 
-        const firstCustomer = waitingCustomers[0];
+        if (snapshot.empty) {
 
-        await updateDoc(
-          doc(db, "queue", firstCustomer.id),
-          {
-            status: "called"
-          }
+          calledList.innerHTML =
+            '<div class="empty">No one has been called.</div>';
+
+          return;
+        }
+
+        snapshot.docs.forEach((customer) => {
+
+          const item =
+            document.createElement("div");
+
+          item.className = "queue-item";
+
+          const personInfo =
+            document.createElement("div");
+
+          personInfo.className = "person-info";
+
+          const status =
+            document.createElement("div");
+
+          status.className = "status";
+          status.textContent = "It's their turn";
+
+          const completeButton =
+            document.createElement("button");
+
+          completeButton.className =
+            "complete-button";
+
+          completeButton.textContent =
+            "COMPLETE";
+
+          completeButton.addEventListener(
+            "click",
+            async () => {
+
+              completeButton.disabled = true;
+
+              try {
+
+                await updateDoc(
+                  doc(db, "queue", customer.id),
+                  {
+                    status: "completed",
+                    completedAt: serverTimestamp()
+                  }
+                );
+
+              } catch (error) {
+
+                console.error(
+                  "Complete error:",
+                  error
+                );
+
+                completeButton.disabled = false;
+              }
+
+            }
+          );
+
+          personInfo.appendChild(status);
+
+          item.appendChild(personInfo);
+          item.appendChild(completeButton);
+
+          calledList.appendChild(item);
+        });
+
+      },
+
+      (error) => {
+
+        console.error(
+          "Called queue error:",
+          error
         );
 
-      } catch (error) {
+        calledList.innerHTML =
+          '<div class="error">Unable to load called customers.</div>';
+      }
+    );
 
-        console.error("Call next error:", error);
-        callNextButton.disabled = false;
+    callNextButton.addEventListener(
+      "click",
+      async () => {
+
+        if (waitingCustomers.length === 0) {
+          return;
+        }
+
+        callNextButton.disabled = true;
+
+        try {
+
+          const firstCustomer =
+            waitingCustomers[0];
+
+          await updateDoc(
+            doc(db, "queue", firstCustomer.id),
+            {
+              status: "called",
+              calledAt: serverTimestamp()
+            }
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Call next error:",
+            error
+          );
+
+          callNextButton.disabled = false;
+        }
 
       }
-
-    });
+    );
 
   </script>
 
