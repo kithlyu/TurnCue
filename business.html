@@ -98,6 +98,24 @@
       color: #b00020;
       padding: 20px 0;
     }
+
+    #callNextButton {
+      width: 100%;
+      border: none;
+      border-radius: 14px;
+      padding: 16px;
+      margin-bottom: 20px;
+      font-size: 17px;
+      font-weight: bold;
+      cursor: pointer;
+      background: #1f1f1f;
+      color: white;
+    }
+
+    #callNextButton:disabled {
+      opacity: 0.4;
+      cursor: default;
+    }
   </style>
 </head>
 
@@ -119,6 +137,10 @@
           <div id="count">0 waiting</div>
         </div>
 
+        <button id="callNextButton" disabled>
+          CALL NEXT
+        </button>
+
         <div id="queueList">
           <div class="empty">No one is waiting.</div>
         </div>
@@ -139,7 +161,9 @@
       query,
       where,
       orderBy,
-      onSnapshot
+      onSnapshot,
+      doc,
+      updateDoc
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
     const firebaseConfig = {
@@ -154,6 +178,12 @@
     const app = initializeApp(firebaseConfig);
     const db = getFirestore(app);
 
+    const queueList = document.getElementById("queueList");
+    const count = document.getElementById("count");
+    const callNextButton = document.getElementById("callNextButton");
+
+    let waitingCustomers = [];
+
     const queueQuery = query(
       collection(db, "queue"),
       where("status", "==", "waiting"),
@@ -165,13 +195,14 @@
 
       (snapshot) => {
 
-        const queueList = document.getElementById("queueList");
-        const count = document.getElementById("count");
+        waitingCustomers = snapshot.docs;
 
         queueList.innerHTML = "";
 
         count.textContent =
-          snapshot.size + (snapshot.size === 1 ? " waiting" : " waiting");
+          snapshot.size + " waiting";
+
+        callNextButton.disabled = snapshot.empty;
 
         if (snapshot.empty) {
           queueList.innerHTML =
@@ -179,7 +210,7 @@
           return;
         }
 
-        snapshot.docs.forEach((doc, index) => {
+        snapshot.docs.forEach((customer, index) => {
 
           const item = document.createElement("div");
           item.className = "queue-item";
@@ -202,10 +233,38 @@
       (error) => {
         console.error("Queue listener error:", error);
 
-        document.getElementById("queueList").innerHTML =
+        queueList.innerHTML =
           '<div class="error">Unable to load queue.</div>';
       }
     );
+
+    callNextButton.addEventListener("click", async () => {
+
+      if (waitingCustomers.length === 0) {
+        return;
+      }
+
+      callNextButton.disabled = true;
+
+      try {
+
+        const firstCustomer = waitingCustomers[0];
+
+        await updateDoc(
+          doc(db, "queue", firstCustomer.id),
+          {
+            status: "called"
+          }
+        );
+
+      } catch (error) {
+
+        console.error("Call next error:", error);
+        callNextButton.disabled = false;
+
+      }
+
+    });
 
   </script>
 
