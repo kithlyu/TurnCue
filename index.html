@@ -64,8 +64,9 @@
       color: white;
     }
 
-    button:hover {
-      opacity: 0.9;
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
     }
 
     #status {
@@ -88,6 +89,13 @@
       line-height: 1.5;
       color: #555;
     }
+
+    #errorMessage {
+      display: none;
+      margin-top: 18px;
+      color: #b00020;
+      font-size: 14px;
+    }
   </style>
 </head>
 
@@ -106,16 +114,20 @@
           We'll cue you.
         </p>
 
-        <button onclick="joinQueue()">JOIN QUEUE</button>
+        <button id="joinButton">JOIN QUEUE</button>
+
+        <div id="errorMessage">
+          Something went wrong. Please try again.
+        </div>
       </div>
 
       <div id="status">
         <h1>You're in!</h1>
 
-        <div class="position">#5</div>
+        <div class="position" id="position">#1</div>
 
-        <div class="ahead">
-          4 people ahead of you
+        <div class="ahead" id="ahead">
+          You're first in line
         </div>
 
         <div class="message">
@@ -127,11 +139,59 @@
     </div>
   </div>
 
-  <script>
-    function joinQueue() {
-      document.getElementById("joinScreen").style.display = "none";
-      document.getElementById("status").style.display = "block";
-    }
+  <script type="module">
+
+    import { initializeApp }
+      from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+
+    import {
+      getFirestore,
+      collection,
+      addDoc,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
+      authDomain: "turncue-83e1a.firebaseapp.com",
+      projectId: "turncue-83e1a",
+      storageBucket: "turncue-83e1a.firebasestorage.app",
+      messagingSenderId: "459437201769",
+      appId: "1:459437201769:web:1859490f3db0f3fc2945f8"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+
+    const joinButton = document.getElementById("joinButton");
+
+    joinButton.addEventListener("click", async () => {
+
+      joinButton.disabled = true;
+      joinButton.textContent = "JOINING...";
+
+      try {
+
+        await addDoc(collection(db, "queue"), {
+          status: "waiting",
+          joinedAt: serverTimestamp()
+        });
+
+        document.getElementById("joinScreen").style.display = "none";
+        document.getElementById("status").style.display = "block";
+
+      } catch (error) {
+
+        console.error("Error joining queue:", error);
+
+        joinButton.disabled = false;
+        joinButton.textContent = "JOIN QUEUE";
+
+        document.getElementById("errorMessage").style.display = "block";
+      }
+
+    });
+
   </script>
 
 </body>
