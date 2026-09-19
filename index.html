@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TurnCue</title>
+</head>
+
+<body>
+
+  <h1>🔔 TurnCue</h1>
+
+  <p>Don't wait around.<br>We'll cue you.</p>
+
+  <button onclick="joinQueue()">JOIN QUEUE</button>
+
+  <div id="status"></div>
+
+  <script>
+    function joinQueue() {
+      document.getElementById("status").innerHTML = `
+        <h2>You're in!</h2>
+        <h1>#5</h1>
+        <p>4 people ahead of you</p>
+        <p>You can walk away.<br>We'll cue you when you're close.</p>
+      `;
+    }
+  </script>
+
+</body>
+</html>
