@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TurnCue Staff</title>
+  <link rel="stylesheet" href="turncue.css">
+</head>
+<body>
+<main class="staff">
+  <header><h1>🔔 TurnCue</h1><div class="muted">Staff</div>
+    <p class="notice">Pilot access: your Staff ID identifies your staff record. Confirming your name is not secure authentication.</p>
+    <nav><a href="business.html">Manager dashboard</a></nav>
+  </header>
+  <div id="message" class="card" role="status" aria-live="polite"></div>
+  <section id="entry" class="card">
+    <h2>Find your staff record</h2>
+    <form id="entryForm">
+      <label for="staffCode">Staff ID</label>
+      <input id="staffCode" placeholder="TC-AB12CD34" required maxlength="11" autocomplete="off" autocapitalize="characters" spellcheck="false">
+      <div class="actions"><button type="submit">CONTINUE</button></div>
+    </form>
+  </section>
+  <section id="confirmation" class="card" hidden>
+    <h2 id="confirmName"></h2>
+    <div class="actions"><button id="confirmButton">YES, CONTINUE</button><button id="notMe" class="secondary">THAT'S NOT ME</button></div>
+  </section>
+  <section id="operation" class="card" hidden>
+    <h2 id="personName"></h2>
+    <p id="staffDetail" class="muted"></p>
+    <div id="assignment"></div>
+    <div class="actions"><button id="changePerson" class="secondary">CHANGE STAFF</button></div>
+    <p class="notice">Changing staff or closing this page does not end your shift. Use END SHIFT to make your window available.</p>
+  </section>
+</main>
+<script type="module">
+import { findStaff, startShift, changeWindowState, callNext, completeCustomer, watchPerson, watchWindows, watchQueue, element, actionButton } from "./turncue.js";
+const $ = id => document.getElementById(id);
+let candidate = null, person = null, windows = [], sessionId = null;
+let busy = false, choosing = false, selectedWindowId = "", stopPerson = null;
+let windowsReady = false, personReady = false, queueReady = false;
+function message(text, error = false) {
+  $("message").textContent = text;
+  $("message").classList.toggle("error", error);
+}
+async function perform(work, success) {
+  if (busy) return;
+  busy = true; message("Working..."); render();
+  try { const result = await work(); message(typeof success === "function" ? success(result) : success || "Saved."); }
+  catch (error) { console.error(error); message(error.message || "Couldn't save. Check your connection and try again.", true); }
+  finally { busy = false; render(); }
+}
+function clearPerson() {
+  if (stopPerson) stopPerson();
+  stopPerson = null; person = null; candidate = null; personReady = false;
+  choosing = false; selectedWindowId = ""; message(""); render();
+}
+function render() {
+  $("entry").hidden = Boolean(candidate || person);
+  $("confirmation").hidden = !candidate || Boolean(person);
+  $("operation").hidden = !person;
+  for (const control of $("entryForm").elements) control.disabled = busy;
+  $("confirmButton").disabled = busy;
+  $("notMe").disabled = busy;
+  $("changePerson").disabled = busy;
+  if (candidate) $("confirmName").textContent = "Are you " + candidate.name + "?";
+  if (!person) return;
+  $("personName").textContent = person.name;
+  $("staffDetail").textContent = person.staffCode + " · " + person.role;
+  const host = $("assignment");
+  host.replaceChildren();
+  if (!personReady || !windowsReady) { host.append(element("p", "Loading current assignment. If this persists, check your connection and reload.")); return; }
+  if (!person.active) { host.append(element("p", "Your staff record is inactive. Please ask the manager.")); return; }
+  if (!person.currentShiftId) {
+    if (!choosing) {
+      host.append(element("p", "You don't have an active shift."), actionButton("START SHIFT", () => { choosing = true; render(); }, busy));
+      return;
+    }
+    const available = windows.filter(w => w.active && w.state === "available" && !w.currentShiftId);
+    if (!available.length) { host.append(element("p", "No windows are available. Ask the manager or wait for a window to become available.")); return; }
+    const label = element("label", "Choose an available window");
+    label.htmlFor = "windowChoice";
+    const select = element("select"); select.id = "windowChoice"; select.disabled = busy;
+    const placeholder = element("option", "Choose a window"); placeholder.value = ""; select.append(placeholder);
+    for (const window of available) { const option = element("option", window.name); option.value = window.id; select.append(option); }
+    if (!available.some(w => w.id === selectedWindowId)) selectedWindowId = "";
+    select.value = selectedWindowId;
+    const button = actionButton("START AT SELECTED WINDOW", () => perform(async () => { await startShift(person.id, selectedWindowId); choosing = false; selectedWindowId = ""; }, "Shift started."), busy || !selectedWindowId);
+    select.addEventListener("change", () => { selectedWindowId = select.value; button.disabled = busy || !selectedWindowId; });
+    host.append(label, select, element("p", "Choose your physical window. A window is reserved only after your shift starts.", "notice"), button);
+    return;
+  }
+  const window = windows.find(w => w.id === person.currentWindowId);
+  if (!window || window.currentShiftId !== person.currentShiftId || window.currentStaffId !== person.id) {
+    host.append(element("p", "Updating your assignment... If this persists, reload or ask the manager."));
+    return;
+  }
+  host.append(element("h3", window.name), element("span", window.state, "state"));
+  host.append(element("p", window.currentEntryId ? "Called: " + window.currentTicketLabel : "No customer currently called.", window.currentEntryId ? "ticket" : "muted"));
+  const actions = element("div", undefined, "actions");
+  actions.append(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId), ticket => ticket ? "Called " + ticket + " to " + window.name + "." : "No one is waiting."), busy || !queueReady || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)));
+  if (window.currentEntryId) actions.append(actionButton("COMPLETE", () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId), "Customer completed."), busy));
+  actions.append(
+    actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause")), busy),
+    actionButton("END SHIFT", () => {
+      if (confirm("End your shift at " + window.name + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end"), "Shift ended. The window is available.");
+    }, busy || Boolean(window.currentEntryId))
+  );
+  host.append(actions);
+  if (window.currentEntryId) host.append(element("p", "Complete this customer before ending your shift. Pause keeps your window and customer assigned.", "notice"));
+}
+$("entryForm").addEventListener("submit", event => {
+  event.preventDefault();
+  perform(async () => { candidate = await findStaff($("staffCode").value); }, "Check the name before continuing.");
+});
+$("notMe").addEventListener("click", clearPerson);
+$("changePerson").addEventListener("click", clearPerson);
+$("confirmButton").addEventListener("click", () => perform(async () => {
+  const confirmed = await findStaff(candidate.staffCode);
+  person = confirmed; candidate = null; personReady = false;
+  stopPerson = watchPerson(person.id, value => {
+    if (!value) { clearPerson(); message("Staff record unavailable. Please ask the manager.", true); return; }
+    person = value; personReady = true; render();
+  }, error => { personReady = false; console.error(error); message("Unable to load your current staff record. Check your connection and reload.", true); render(); });
+}, "Staff record confirmed."));
+watchWindows(value => { windows = value; windowsReady = true; render(); }, error => { windowsReady = false; console.error(error); message("Unable to load windows. Check your connection and Firebase setup, then reload.", true); render(); });
+watchQueue(queue => { sessionId = queue?.currentSessionId || null; queueReady = Boolean(sessionId); render(); }, error => { queueReady = false; console.error(error); message("Unable to load the operational session. Check your connection and reload.", true); render(); });
+render();
+</script>
+</body>
+</html>

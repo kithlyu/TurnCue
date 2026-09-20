@@ -4,840 +4,202 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TurnCue Business</title>
-
-  <style>
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      margin: 0;
-      font-family: Arial, sans-serif;
-      background: #f5f5f5;
-      color: #1f1f1f;
-    }
-
-    .app {
-      min-height: 100vh;
-      padding: 40px 24px;
-    }
-
-    .dashboard {
-      width: 100%;
-      max-width: 700px;
-      margin: 0 auto;
-    }
-
-    .header {
-      margin-bottom: 30px;
-    }
-
-    .logo {
-      font-size: 32px;
-      margin-bottom: 8px;
-    }
-
-    h1 {
-      margin: 0 0 8px;
-      font-size: 32px;
-    }
-
-    .subtitle {
-      color: #666;
-      font-size: 16px;
-    }
-
-    .session-bar {
-      background: #fff;
-      border-radius: 16px;
-      padding: 16px 18px;
-      margin-bottom: 20px;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.06);
-    }
-
-    .session-status {
-      font-weight: bold;
-      margin-bottom: 4px;
-    }
-
-    .session-detail {
-      color: #666;
-      font-size: 14px;
-    }
-
-    .queue-card {
-      background: white;
-      border-radius: 20px;
-      padding: 24px;
-      margin-bottom: 20px;
-      box-shadow: 0 8px 30px rgba(0,0,0,0.08);
-    }
-
-    .queue-title {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 20px;
-    }
-
-    .queue-title h2 {
-      margin: 0;
-      font-size: 22px;
-    }
-
-    .count {
-      color: #666;
-      font-size: 15px;
-    }
-
-    .queue-item {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      padding: 18px 0;
-      border-top: 1px solid #eee;
-    }
-
-    .person-info {
-      display: flex;
-      align-items: center;
-      gap: 16px;
-    }
-
-    .ticket {
-      font-size: 22px;
-      font-weight: bold;
-      min-width: 78px;
-    }
-
-    .status {
-      font-size: 15px;
-      color: #555;
-    }
-
-    .empty {
-      text-align: center;
-      color: #777;
-      padding: 35px 0;
-    }
-
-    .error {
-      color: #b00020;
-      padding: 20px 0;
-    }
-
-    #callNextButton {
-      width: 100%;
-      border: none;
-      border-radius: 14px;
-      padding: 16px;
-      margin-bottom: 20px;
-      font-size: 17px;
-      font-weight: bold;
-      cursor: pointer;
-      background: #1f1f1f;
-      color: white;
-    }
-
-    #callNextButton:disabled {
-      opacity: 0.4;
-      cursor: default;
-    }
-
-    .complete-button {
-      border: none;
-      border-radius: 10px;
-      padding: 10px 14px;
-      font-size: 14px;
-      font-weight: bold;
-      cursor: pointer;
-      background: #1f1f1f;
-      color: white;
-    }
-
-    .complete-button:disabled {
-      opacity: 0.5;
-      cursor: default;
-    }
-  </style>
+  <link rel="stylesheet" href="turncue.css">
 </head>
-
 <body>
-
-  <div class="app">
-    <div class="dashboard">
-
-      <div class="header">
-        <div class="logo">🔔</div>
-        <h1>TurnCue</h1>
-        <div class="subtitle">Business Dashboard</div>
-      </div>
-
-      <div class="session-bar">
-        <div id="sessionStatus" class="session-status">
-          Setting up TurnCue...
-        </div>
-
-        <div id="sessionDetail" class="session-detail">
-          Please wait.
-        </div>
-      </div>
-
-      <div class="queue-card">
-
-        <div class="queue-title">
-          <h2>Waiting</h2>
-          <div id="waitingCount" class="count">0 waiting</div>
-        </div>
-
-        <button id="callNextButton" disabled>
-          CALL NEXT
-        </button>
-
-        <div id="waitingList">
-          <div class="empty">Loading queue...</div>
-        </div>
-
-      </div>
-
-      <div class="queue-card">
-
-        <div class="queue-title">
-          <h2>Called</h2>
-          <div id="calledCount" class="count">0 called</div>
-        </div>
-
-        <div id="calledList">
-          <div class="empty">Loading...</div>
-        </div>
-
-      </div>
-
-    </div>
-  </div>
-
-  <script type="module">
-
-    import { initializeApp }
-      from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
-
-    import {
-      getFirestore,
-      doc,
-      getDoc,
-      setDoc,
-      collection,
-      query,
-      where,
-      orderBy,
-      onSnapshot,
-      updateDoc,
-      serverTimestamp,
-      runTransaction
-    } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
-
-
-    const firebaseConfig = {
-      apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
-      authDomain: "turncue-83e1a.firebaseapp.com",
-      projectId: "turncue-83e1a",
-      storageBucket: "turncue-83e1a.firebasestorage.app",
-      messagingSenderId: "459437201769",
-      appId: "1:459437201769:web:1859490f3db0f3fc2945f8"
-    };
-
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-
-    /*
-      DEVELOPMENT IDs
-
-      These are intentionally simple for Batch 1.
-      Later, TurnCue setup will create real businesses,
-      locations and queues.
-    */
-
-    const BUSINESS_ID = "demo-business";
-    const LOCATION_ID = "main-location";
-    const QUEUE_ID = "main-queue";
-
-
-    const sessionStatus =
-      document.getElementById("sessionStatus");
-
-    const sessionDetail =
-      document.getElementById("sessionDetail");
-
-    const waitingList =
-      document.getElementById("waitingList");
-
-    const waitingCount =
-      document.getElementById("waitingCount");
-
-    const calledList =
-      document.getElementById("calledList");
-
-    const calledCount =
-      document.getElementById("calledCount");
-
-    const callNextButton =
-      document.getElementById("callNextButton");
-
-
-    let currentSessionId = null;
-    let waitingCustomers = [];
-
-    let unsubscribeWaiting = null;
-    let unsubscribeCalled = null;
-
-
-    async function initializeTurnCue() {
-
-      try {
-
-        sessionStatus.textContent =
-          "Setting up TurnCue...";
-
-        const businessRef =
-          doc(db, "businesses", BUSINESS_ID);
-
-        const locationRef =
-          doc(db, "locations", LOCATION_ID);
-
-        const queueRef =
-          doc(db, "queues", QUEUE_ID);
-
-
-        /*
-          Create the permanent development records if
-          they do not exist yet.
-        */
-
-        const businessSnapshot =
-          await getDoc(businessRef);
-
-        if (!businessSnapshot.exists()) {
-
-          await setDoc(
-            businessRef,
-            {
-              name: "TurnCue Demo Business",
-              active: true,
-              createdAt: serverTimestamp()
-            }
-          );
-        }
-
-
-        const locationSnapshot =
-          await getDoc(locationRef);
-
-        if (!locationSnapshot.exists()) {
-
-          await setDoc(
-            locationRef,
-            {
-              businessId: BUSINESS_ID,
-              name: "Main Location",
-              active: true,
-              createdAt: serverTimestamp()
-            }
-          );
-        }
-
-
-        const queueSnapshot =
-          await getDoc(queueRef);
-
-
-        if (!queueSnapshot.exists()) {
-
-          await setDoc(
-            queueRef,
-            {
-              businessId: BUSINESS_ID,
-              locationId: LOCATION_ID,
-              name: "Main Queue",
-              active: true,
-              currentSessionId: null,
-              ticketPrefix: "A",
-              ticketStart: 101,
-              createdAt: serverTimestamp()
-            }
-          );
-        }
-
-
-        /*
-          Re-read the queue because it may have just
-          been created.
-        */
-
-        const freshQueueSnapshot =
-          await getDoc(queueRef);
-
-        const queueData =
-          freshQueueSnapshot.data();
-
-
-        if (queueData.currentSessionId) {
-
-          const existingSessionRef =
-            doc(
-              db,
-              "sessions",
-              queueData.currentSessionId
-            );
-
-          const existingSessionSnapshot =
-            await getDoc(existingSessionRef);
-
-
-          if (
-            existingSessionSnapshot.exists() &&
-            existingSessionSnapshot.data().status === "open"
-          ) {
-
-            currentSessionId =
-              existingSessionSnapshot.id;
-
-          } else {
-
-            await createNewSession(queueRef);
-          }
-
-        } else {
-
-          await createNewSession(queueRef);
-        }
-
-
-        sessionStatus.textContent =
-          "Queue is open";
-
-        sessionDetail.textContent =
-          "Operational session: " +
-          currentSessionId;
-
-
-        startQueueListeners();
-
-      } catch (error) {
-
-        console.error(
-          "TurnCue initialization error:",
-          error
-        );
-
-        sessionStatus.textContent =
-          "Unable to initialize TurnCue";
-
-        sessionDetail.textContent =
-          error.message;
-
-        waitingList.innerHTML =
-          '<div class="error">Unable to load the queue.</div>';
-
-        calledList.innerHTML =
-          '<div class="error">Unable to load called customers.</div>';
-      }
+<main>
+  <header>
+    <h1>🔔 TurnCue</h1>
+    <div class="muted">Manager Dashboard</div>
+    <nav><a href="index.html">Customer page</a><a href="staff.html">Staff page / work a window</a></nav>
+    <p class="notice">Pilot access: this dashboard is not protected by authentication. Staff ID confirmation is not a secure sign-in. Use only with trusted pilot participants.</p>
+  </header>
+  <div id="message" class="card" role="status" aria-live="polite"></div>
+  <section class="card" aria-labelledby="sessionTitle">
+    <h2 id="sessionTitle">Operational session</h2>
+    <div id="sessionStatus">Setting up TurnCue...</div>
+    <p id="sessionDetail" class="muted"></p>
+  </section>
+  <section class="card">
+    <h2>Staff roster</h2>
+    <form id="staffForm">
+      <label for="staffName">Name</label>
+      <input id="staffName" maxlength="80" required autocomplete="name">
+      <label for="staffRole">Role</label>
+      <select id="staffRole"><option value="staff">Staff</option><option value="manager">Manager</option></select>
+      <div class="actions"><button type="submit">REGISTER STAFF</button></div>
+    </form>
+    <p class="notice">Managers can also work windows using their Staff ID. End a shift before marking a staff member inactive.</p>
+    <div id="roster">Loading staff...</div>
+  </section>
+  <section class="card">
+    <h2>Windows</h2>
+    <form id="windowForm">
+      <label for="windowName">New window label</label>
+      <input id="windowName" maxlength="80" required placeholder="Window 1">
+      <div class="actions"><button type="submit">ADD WINDOW</button></div>
+    </form>
+    <p id="capacity" class="muted"></p>
+    <div id="windows">Loading windows...</div>
+  </section>
+  <section class="card"><h2 id="waitingTitle">Waiting</h2><div id="waiting">Loading queue...</div></section>
+  <section class="card"><h2 id="calledTitle">Called</h2><div id="called">Loading called customers...</div></section>
+</main>
+<script type="module">
+import {
+  initializeTurnCue, registerStaff, setStaffActive, saveWindow, changeWindowState,
+  callNext, completeCustomer, watchStaff, watchWindows, watchQueue, watchEntries,
+  element, actionButton
+} from "./turncue.js";
+
+const $ = id => document.getElementById(id);
+let roster = [], windows = [], waiting = [], called = [];
+let sessionId = null, busy = false, stopEntries = [];
+const ready = { staff: false, windows: false, queue: false, waiting: false, called: false };
+const operational = () => ready.staff && ready.windows && ready.queue;
+function message(text, error = false) {
+  $("message").textContent = text;
+  $("message").classList.toggle("error", error);
+}
+function listenError(kind) {
+  return error => {
+    ready[kind] = false;
+    console.error(kind + " listener:", error);
+    message("Unable to load " + kind + ". Check your connection and Firebase setup, then reload. " + error.message, true);
+    render();
+  };
+}
+async function perform(work, success) {
+  if (busy) return;
+  busy = true;
+  message("Working...");
+  render();
+  try {
+    const result = await work();
+    message(typeof success === "function" ? success(result) : success || "Saved.");
+  } catch (error) {
+    console.error(error);
+    message(error.message || "Couldn't save. Check your connection and try again.", true);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+function render() {
+  for (const form of [$("staffForm"), $("windowForm")]) {
+    for (const control of form.elements) control.disabled = busy || !operational();
+  }
+  renderRoster();
+  renderWindows();
+  renderEntries();
+}
+function renderRoster() {
+  const host = $("roster");
+  host.replaceChildren();
+  if (!ready.staff) { host.textContent = "Staff roster unavailable or loading."; return; }
+  if (!roster.length) { host.textContent = "Register the first staff member above."; return; }
+  for (const person of roster) {
+    const row = element("div", undefined, "row");
+    const text = element("div");
+    text.append(element("strong", person.name), element("p", person.staffCode + " · " + person.role + " · " + (person.active ? "Active" : "Inactive"), "muted"));
+    const button = actionButton(person.active ? "MARK INACTIVE" : "REACTIVATE", () => perform(() => setStaffActive(person.id, !person.active)), busy || !operational() || Boolean(person.currentShiftId));
+    row.append(text, button);
+    host.append(row);
+  }
+}
+function renderWindows() {
+  const host = $("windows");
+  host.replaceChildren();
+  const configured = windows.filter(w => w.active).length;
+  const active = windows.filter(w => w.active && w.state === "active" && w.currentShiftId).length;
+  $("capacity").textContent = ready.windows ? configured + " configured · " + active + " currently active" : "Loading capacity...";
+  if (!ready.windows) { host.textContent = "Windows unavailable or loading."; return; }
+  if (!windows.length) { host.textContent = "Add a window, then ask staff to choose it on Start Shift."; return; }
+  for (const window of windows) {
+    const card = element("div", undefined, "window");
+    const person = roster.find(p => p.id === window.currentStaffId);
+    card.append(element("h3", window.name), element("span", window.state, "state"));
+    card.append(element("p", person ? person.name + " · " + person.staffCode : window.currentStaffId ? "Loading assignee..." : "No staff assigned", "muted"));
+    if (window.currentEntryId) card.append(element("p", "Called: " + window.currentTicketLabel, "ticket"));
+    const actions = element("div", undefined, "actions");
+    const disabled = busy || !operational();
+    if (window.currentShiftId) {
+      actions.append(
+        actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId, "manager"), ticket => ticket ? "Called " + ticket + " to " + window.name + "." : "No one is waiting."), disabled || !ready.waiting || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)),
+        actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause", "manager")), disabled),
+        actionButton("END SHIFT", () => {
+          if (confirm("End " + (person?.name || "this staff member") + "'s shift at " + window.name + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end", "manager"), "Shift ended. The window is available.");
+        }, disabled || Boolean(window.currentEntryId))
+      );
+      if (window.currentEntryId) actions.prepend(actionButton("COMPLETE " + window.currentTicketLabel, () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId, "manager"), "Customer completed."), disabled));
+    } else {
+      actions.append(
+        actionButton("RENAME", () => {
+          const name = prompt("Window label", window.name);
+          if (name !== null) perform(() => saveWindow(window.id, name, window.active));
+        }, disabled),
+        actionButton(window.active ? "DISABLE WINDOW" : "ENABLE WINDOW", () => perform(() => saveWindow(window.id, window.name, !window.active)), disabled)
+      );
     }
-
-
-    async function createNewSession(queueRef) {
-
-      const sessionRef =
-        doc(collection(db, "sessions"));
-
-
-      await setDoc(
-        sessionRef,
-        {
-          businessId: BUSINESS_ID,
-          locationId: LOCATION_ID,
-          queueId: QUEUE_ID,
-
-          status: "open",
-
-          ticketPrefix: "A",
-          nextTicketNumber: 101,
-
-          openedAt: serverTimestamp(),
-          closedAt: null
-        }
-      );
-
-
-      await updateDoc(
-        queueRef,
-        {
-          currentSessionId: sessionRef.id
-        }
-      );
-
-
-      currentSessionId =
-        sessionRef.id;
+    card.append(actions);
+    if (window.currentEntryId) card.append(element("p", "Complete this customer before ending the shift. Pausing keeps this assignment.", "notice"));
+    host.append(card);
+  }
+}
+function renderEntries() {
+  $("waitingTitle").textContent = "Waiting" + (ready.waiting ? " (" + waiting.length + ")" : "");
+  $("calledTitle").textContent = "Called" + (ready.called ? " (" + called.length + ")" : "");
+  for (const [kind, list] of [["waiting", waiting], ["called", called]]) {
+    const host = $(kind);
+    host.replaceChildren();
+    if (!ready[kind]) { host.textContent = "Queue unavailable or loading."; continue; }
+    if (!list.length) { host.textContent = kind === "waiting" ? "No one is waiting." : "No one has been called."; continue; }
+    list.forEach((entry, index) => {
+      const row = element("div", undefined, "row");
+      const info = element("div");
+      info.append(element("strong", entry.ticketLabel, "ticket"), element("p", kind === "waiting" ? "Position " + (index + 1) : entry.calledWindowLabel || "Earlier Batch 1 call · no window", "muted"));
+      row.append(info);
+      if (kind === "called") row.append(actionButton("COMPLETE", () => perform(() => completeCustomer(entry.sessionId, entry.id, entry.calledWindowId || null, entry.calledByShiftId || null, "manager"), "Customer completed."), busy || !operational()));
+      host.append(row);
+    });
+  }
+}
+$("staffForm").addEventListener("submit", event => {
+  event.preventDefault();
+  const name = $("staffName").value, role = $("staffRole").value;
+  perform(async () => { const code = await registerStaff(name, role); $("staffForm").reset(); return code; }, code => "Registered " + name.trim() + ". Staff ID: " + code + ". Share this ID with the staff member.");
+});
+$("windowForm").addEventListener("submit", event => {
+  event.preventDefault();
+  const name = $("windowName").value;
+  perform(async () => { await saveWindow(null, name, true); $("windowForm").reset(); }, "Window added. Staff can now choose it on Start Shift.");
+});
+render();
+try {
+  await initializeTurnCue();
+  watchStaff(value => { roster = value; ready.staff = true; render(); }, listenError("staff"));
+  watchWindows(value => { windows = value; ready.windows = true; render(); }, listenError("windows"));
+  watchQueue(queue => {
+    ready.queue = Boolean(queue?.currentSessionId);
+    $("sessionStatus").textContent = ready.queue ? "Queue session ready" : "No operational session";
+    $("sessionDetail").textContent = queue?.currentSessionId ? "Operational session: " + queue.currentSessionId : "Reload the manager page to initialize.";
+    const nextSessionId = queue?.currentSessionId || null;
+    if (nextSessionId !== sessionId) {
+      stopEntries.forEach(stop => stop());
+      stopEntries = [];
+      sessionId = nextSessionId;
+      waiting = []; called = []; ready.waiting = false; ready.called = false;
+      if (sessionId) stopEntries = [
+        watchEntries(sessionId, "waiting", value => { waiting = value; ready.waiting = true; render(); }, listenError("waiting")),
+        watchEntries(sessionId, "called", value => { called = value; ready.called = true; render(); }, listenError("called"))
+      ];
     }
-
-
-    function startQueueListeners() {
-
-      if (!currentSessionId) {
-        return;
-      }
-
-
-      if (unsubscribeWaiting) {
-        unsubscribeWaiting();
-      }
-
-      if (unsubscribeCalled) {
-        unsubscribeCalled();
-      }
-
-
-      const entriesRef =
-        collection(
-          db,
-          "sessions",
-          currentSessionId,
-          "entries"
-        );
-
-
-      const waitingQuery = query(
-        entriesRef,
-        where("status", "==", "waiting"),
-        orderBy("joinedAt", "asc")
-      );
-
-
-      const calledQuery = query(
-        entriesRef,
-        where("status", "==", "called"),
-        orderBy("calledAt", "asc")
-      );
-
-
-      unsubscribeWaiting =
-        onSnapshot(
-
-          waitingQuery,
-
-          (snapshot) => {
-
-            waitingCustomers =
-              snapshot.docs;
-
-            waitingList.innerHTML = "";
-
-            waitingCount.textContent =
-              snapshot.size + " waiting";
-
-            callNextButton.disabled =
-              snapshot.empty;
-
-
-            if (snapshot.empty) {
-
-              waitingList.innerHTML =
-                '<div class="empty">No one is waiting.</div>';
-
-              return;
-            }
-
-
-            snapshot.docs.forEach(
-              (customer, index) => {
-
-                const data =
-                  customer.data();
-
-
-                const item =
-                  document.createElement("div");
-
-                item.className =
-                  "queue-item";
-
-
-                const personInfo =
-                  document.createElement("div");
-
-                personInfo.className =
-                  "person-info";
-
-
-                const ticket =
-                  document.createElement("div");
-
-                ticket.className =
-                  "ticket";
-
-                ticket.textContent =
-                  data.ticketLabel ||
-                  "#" + (index + 1);
-
-
-                const status =
-                  document.createElement("div");
-
-                status.className =
-                  "status";
-
-                status.textContent =
-                  "Position " + (index + 1);
-
-
-                personInfo.appendChild(ticket);
-                personInfo.appendChild(status);
-
-                item.appendChild(personInfo);
-
-                waitingList.appendChild(item);
-              }
-            );
-          },
-
-          (error) => {
-
-            console.error(
-              "Waiting queue error:",
-              error
-            );
-
-            waitingList.innerHTML =
-              '<div class="error">Unable to load waiting queue.</div>';
-          }
-        );
-
-
-      unsubscribeCalled =
-        onSnapshot(
-
-          calledQuery,
-
-          (snapshot) => {
-
-            calledList.innerHTML = "";
-
-            calledCount.textContent =
-              snapshot.size + " called";
-
-
-            if (snapshot.empty) {
-
-              calledList.innerHTML =
-                '<div class="empty">No one has been called.</div>';
-
-              return;
-            }
-
-
-            snapshot.docs.forEach(
-              (customer) => {
-
-                const data =
-                  customer.data();
-
-
-                const item =
-                  document.createElement("div");
-
-                item.className =
-                  "queue-item";
-
-
-                const personInfo =
-                  document.createElement("div");
-
-                personInfo.className =
-                  "person-info";
-
-
-                const ticket =
-                  document.createElement("div");
-
-                ticket.className =
-                  "ticket";
-
-                ticket.textContent =
-                  data.ticketLabel ||
-                  "Ticket";
-
-
-                const status =
-                  document.createElement("div");
-
-                status.className =
-                  "status";
-
-                status.textContent =
-                  "It's their turn";
-
-
-                const completeButton =
-                  document.createElement("button");
-
-                completeButton.className =
-                  "complete-button";
-
-                completeButton.textContent =
-                  "COMPLETE";
-
-
-                completeButton.addEventListener(
-                  "click",
-                  async () => {
-
-                    completeButton.disabled =
-                      true;
-
-                    try {
-
-                      await updateDoc(
-                        customer.ref,
-                        {
-                          status: "completed",
-                          completedAt:
-                            serverTimestamp()
-                        }
-                      );
-
-                    } catch (error) {
-
-                      console.error(
-                        "Complete error:",
-                        error
-                      );
-
-                      completeButton.disabled =
-                        false;
-                    }
-                  }
-                );
-
-
-                personInfo.appendChild(ticket);
-                personInfo.appendChild(status);
-
-                item.appendChild(personInfo);
-                item.appendChild(
-                  completeButton
-                );
-
-                calledList.appendChild(item);
-              }
-            );
-          },
-
-          (error) => {
-
-            console.error(
-              "Called queue error:",
-              error
-            );
-
-            calledList.innerHTML =
-              '<div class="error">Unable to load called customers.</div>';
-          }
-        );
-    }
-
-
-    /*
-      CALL NEXT uses a Firestore transaction.
-
-      This matters later when multiple windows exist.
-      Batch 1 still has one business dashboard, but
-      we're already avoiding the old simple update.
-    */
-
-    callNextButton.addEventListener(
-      "click",
-      async () => {
-
-        if (
-          !currentSessionId ||
-          waitingCustomers.length === 0
-        ) {
-          return;
-        }
-
-
-        callNextButton.disabled = true;
-
-
-        try {
-
-          const firstCustomerRef =
-            waitingCustomers[0].ref;
-
-
-          await runTransaction(
-            db,
-            async (transaction) => {
-
-              const customerSnapshot =
-                await transaction.get(
-                  firstCustomerRef
-                );
-
-
-              if (!customerSnapshot.exists()) {
-
-                throw new Error(
-                  "Customer no longer exists."
-                );
-              }
-
-
-              const customerData =
-                customerSnapshot.data();
-
-
-              if (
-                customerData.status !==
-                "waiting"
-              ) {
-
-                throw new Error(
-                  "Customer is no longer waiting."
-                );
-              }
-
-
-              transaction.update(
-                firstCustomerRef,
-                {
-                  status: "called",
-                  calledAt:
-                    serverTimestamp()
-                }
-              );
-            }
-          );
-
-        } catch (error) {
-
-          console.error(
-            "Call next error:",
-            error
-          );
-
-          callNextButton.disabled = false;
-        }
-      }
-    );
-
-
-    initializeTurnCue();
-
-  </script>
-
+    render();
+  }, listenError("queue"));
+} catch (error) {
+  $("sessionStatus").textContent = "Unable to initialize TurnCue";
+  message(error.message, true);
+}
+</script>
 </body>
 </html>

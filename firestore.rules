@@ -1,0 +1,242 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // TRUSTED PILOT INTEGRITY ONLY. There is no staff authentication here.
+    // Validate each document, not the operator or links between documents.
+    // Client transactions enforce ownership, active shifts, one assignment,
+    // waiting candidates, atomic history writes, and unresolved customers.
+    // Direct API callers can bypass those cross-document client safeguards.
+    // No get()/getAfter() chains: keep rule evaluation bounded.
+    function shape(fields) {
+      return request.resource.data.keys().hasAll(fields)
+        && request.resource.data.keys().hasOnly(fields);
+    }
+    function changedOnly(fields) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(fields);
+    }
+    function text(value) {
+      return value is string && value.size() > 0 && value.size() <= 120;
+    }
+    function scope(d) {
+      return text(d.businessId) && text(d.locationId) && text(d.queueId);
+    }
+    function emptyCustomer(d) {
+      return d.currentEntryId == null && d.currentSessionId == null;
+    }
+    function customerPointer(d) {
+      return emptyCustomer(d) || (text(d.currentEntryId) && text(d.currentSessionId));
+    }
+    function customerTransition(a, b) {
+      // Never replace one unresolved customer with another.
+      return (a.currentEntryId == b.currentEntryId && a.currentSessionId == b.currentSessionId)
+        || emptyCustomer(a) || emptyCustomer(b);
+    }
+    function unassigned(d) {
+      return d.currentStaffId == null && d.currentShiftId == null;
+    }
+    function sameOwner(a, b) {
+      return a.currentStaffId == b.currentStaffId && a.currentShiftId == b.currentShiftId;
+    }
+    match /businesses/{businessId} {
+      allow read: if true;
+      allow create: if shape(['name','active','createdAt'])
+        && text(request.resource.data.name) && request.resource.data.active is bool
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /locations/{locationId} {
+      allow read: if true;
+      allow create: if shape(['businessId','name','active','createdAt'])
+        && text(request.resource.data.businessId) && text(request.resource.data.name)
+        && request.resource.data.active is bool && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /queues/{queueId} {
+      allow read: if true;
+      allow create: if shape(['businessId','locationId','name','active','currentSessionId','ticketPrefix','ticketStart','createdAt'])
+        && text(request.resource.data.businessId) && text(request.resource.data.locationId)
+        && text(request.resource.data.name) && request.resource.data.active is bool
+        && (request.resource.data.currentSessionId == null || text(request.resource.data.currentSessionId))
+        && text(request.resource.data.ticketPrefix) && request.resource.data.ticketStart is int
+        && request.resource.data.createdAt == request.time;
+      allow update: if changedOnly(['currentSessionId']) && text(request.resource.data.currentSessionId);
+      allow delete: if false;
+    }
+    match /sessions/{sessionId} {
+      allow read: if true;
+      allow create: if shape(['businessId','locationId','queueId','status','ticketPrefix','nextTicketNumber','openedAt','closedAt'])
+        && scope(request.resource.data) && request.resource.data.status == 'open'
+        && text(request.resource.data.ticketPrefix) && request.resource.data.nextTicketNumber is int
+        && request.resource.data.openedAt == request.time && request.resource.data.closedAt == null;
+      // Allow the current or next counter during contention. The client creates one entry and
+      // increments this counter in the SAME transaction.
+      allow update: if changedOnly(['nextTicketNumber'])
+        && request.resource.data.nextTicketNumber is int
+        && request.resource.data.nextTicketNumber >= resource.data.nextTicketNumber
+        && request.resource.data.nextTicketNumber <= resource.data.nextTicketNumber + 1;
+      allow delete: if false;
+      match /entries/{entryId} {
+        allow read: if true;
+        allow create: if shape(['businessId','locationId','queueId','sessionId','ticketNumber','ticketLabel','status','joinedAt','calledAt','completedAt','cancelledAt'])
+          && scope(request.resource.data) && request.resource.data.sessionId == sessionId
+          && request.resource.data.ticketNumber is int && text(request.resource.data.ticketLabel)
+          && request.resource.data.status == 'waiting' && request.resource.data.joinedAt == request.time
+          && request.resource.data.calledAt == null && request.resource.data.completedAt == null
+          && request.resource.data.cancelledAt == null;
+        allow update: if
+          (resource.data.status == 'waiting' && request.resource.data.status == 'called'
+            && changedOnly(['status','calledAt','calledByStaffId','calledByShiftId','calledWindowId','calledWindowLabel'])
+            && request.resource.data.calledAt == request.time
+            && text(request.resource.data.calledByStaffId) && text(request.resource.data.calledByShiftId)
+            && text(request.resource.data.calledWindowId) && text(request.resource.data.calledWindowLabel))
+          ||
+          (resource.data.status == 'called' && request.resource.data.status == 'completed'
+            && changedOnly(['status','completedAt']) && request.resource.data.completedAt == request.time)
+          ||
+          (resource.data.status == 'waiting' && request.resource.data.status == 'cancelled'
+            && changedOnly(['status','cancelledAt']) && request.resource.data.cancelledAt == request.time);
+        allow delete: if false;
+      }
+    }
+    match /staffCodes/{staffCode} {
+      allow read: if true;
+      allow create: if staffCode.matches('^TC-[A-Z0-9]{8}$')
+        && shape(['businessId','staffId','createdAt'])
+        && text(request.resource.data.businessId) && text(request.resource.data.staffId)
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+    match /staff/{staffId} {
+      allow read: if true;
+      allow create: if shape(['businessId','staffCode','name','role','active','currentShiftId','currentWindowId','createdAt','updatedAt'])
+        && text(request.resource.data.businessId) && text(request.resource.data.name)
+        && request.resource.data.staffCode.matches('^TC-[A-Z0-9]{8}$')
+        && request.resource.data.role in ['staff','manager'] && request.resource.data.active == true
+        && request.resource.data.currentShiftId == null && request.resource.data.currentWindowId == null
+        && request.resource.data.createdAt == request.time && request.resource.data.updatedAt == request.time;
+      allow update: if request.resource.data.updatedAt == request.time && (
+        (changedOnly(['active','updatedAt']) && request.resource.data.active is bool
+          && resource.data.currentShiftId == null && resource.data.currentWindowId == null)
+        ||
+        (changedOnly(['currentShiftId','currentWindowId','updatedAt']) && resource.data.active == true && (
+          (resource.data.currentShiftId == null && resource.data.currentWindowId == null
+            && text(request.resource.data.currentShiftId) && text(request.resource.data.currentWindowId))
+          ||
+          (resource.data.currentShiftId is string && request.resource.data.currentShiftId == null
+            && request.resource.data.currentWindowId == null)
+        ))
+      );
+      allow delete: if false;
+    }
+    match /windows/{windowId} {
+      function transition() {
+        let a = resource.data;
+        let b = request.resource.data;
+        return
+          (a.state == 'available' && b.state == 'active' && unassigned(a)
+            && text(b.currentStaffId) && text(b.currentShiftId) && emptyCustomer(b))
+          ||
+          (a.state in ['active','paused'] && b.state == 'available'
+            && emptyCustomer(a) && emptyCustomer(b) && unassigned(b))
+          ||
+          (sameOwner(a, b) && (
+            (a.state == b.state && a.state in ['active','paused'] && customerTransition(a, b)
+              && (a.state == 'active' || emptyCustomer(b)))
+            ||
+            (a.state == 'active' && b.state == 'paused' && a.currentEntryId == b.currentEntryId
+              && a.currentSessionId == b.currentSessionId)
+            ||
+            (a.state == 'paused' && b.state == 'active' && a.currentEntryId == b.currentEntryId
+              && a.currentSessionId == b.currentSessionId)
+          ));
+      }
+      allow read: if true;
+      allow create: if shape(['businessId','locationId','queueId','name','active','state','currentStaffId','currentShiftId','currentEntryId','currentSessionId','currentTicketLabel','lastEventId','lastActionAt','stateChangedAt','createdAt','updatedAt'])
+        && scope(request.resource.data) && text(request.resource.data.name) && request.resource.data.active is bool
+        && request.resource.data.state == (request.resource.data.active ? 'available' : 'inactive')
+        && unassigned(request.resource.data) && emptyCustomer(request.resource.data)
+        && request.resource.data.currentTicketLabel == null && request.resource.data.lastEventId == null
+        && request.resource.data.lastActionAt == null && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time && request.resource.data.stateChangedAt == request.time;
+      allow update: if request.resource.data.updatedAt == request.time && (
+        (changedOnly(['name','updatedAt'])
+          && unassigned(resource.data) && emptyCustomer(resource.data)
+          && text(request.resource.data.name))
+        ||
+        (changedOnly(['name','active','state','stateChangedAt','updatedAt','lastEventId'])
+          && unassigned(resource.data) && emptyCustomer(resource.data)
+          && text(request.resource.data.name) && request.resource.data.active is bool
+          && request.resource.data.active != resource.data.active
+          && ((resource.data.active == true && resource.data.state == 'available'
+              && request.resource.data.active == false && request.resource.data.state == 'inactive')
+            || (resource.data.active == false && resource.data.state == 'inactive'
+              && request.resource.data.active == true && request.resource.data.state == 'available'))
+          && text(request.resource.data.lastEventId)
+          && request.resource.data.stateChangedAt == request.time)
+        ||
+        (changedOnly(['state','stateChangedAt','currentStaffId','currentShiftId','currentEntryId',
+            'currentSessionId','currentTicketLabel','lastActionAt','updatedAt','lastEventId'])
+          && resource.data.active == true && request.resource.data.lastActionAt == request.time
+          && text(request.resource.data.lastEventId) && customerPointer(request.resource.data)
+          && (emptyCustomer(request.resource.data) ? request.resource.data.currentTicketLabel == null : text(request.resource.data.currentTicketLabel))
+          && (resource.data.state == request.resource.data.state
+            ? request.resource.data.stateChangedAt == resource.data.stateChangedAt
+            : request.resource.data.stateChangedAt == request.time)
+          && transition())
+      );
+      allow delete: if false;
+    }
+    match /shifts/{shiftId} {
+      allow read: if true;
+      allow create: if shape(['businessId','locationId','queueId','staffId','windowId','state','startedAt','endedAt','currentEntryId','currentSessionId','lastActionAt'])
+        && scope(request.resource.data) && text(request.resource.data.staffId) && text(request.resource.data.windowId)
+        && request.resource.data.state == 'active' && request.resource.data.startedAt == request.time
+        && request.resource.data.endedAt == null && emptyCustomer(request.resource.data)
+        && request.resource.data.lastActionAt == request.time;
+      allow update: if resource.data.state in ['active','paused'] && resource.data.endedAt == null
+        && changedOnly(['state','endedAt','currentEntryId','currentSessionId','lastActionAt'])
+        && request.resource.data.lastActionAt == request.time && (
+          (request.resource.data.state in ['active','paused'] && request.resource.data.endedAt == null
+            && customerPointer(request.resource.data) && customerTransition(resource.data, request.resource.data)
+            && (resource.data.state == request.resource.data.state
+              || (resource.data.currentEntryId == request.resource.data.currentEntryId
+                && resource.data.currentSessionId == request.resource.data.currentSessionId))
+            && (resource.data.state != 'paused' || emptyCustomer(request.resource.data)
+              || resource.data.currentEntryId == request.resource.data.currentEntryId))
+          ||
+          (request.resource.data.state == 'ended' && request.resource.data.endedAt == request.time
+            && emptyCustomer(resource.data) && emptyCustomer(request.resource.data))
+        );
+      allow delete: if false;
+    }
+    match /windowEvents/{eventId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['businessId','locationId','queueId','windowId','staffId','shiftId','type','fromState','toState','source','occurredAt'])
+        && request.resource.data.keys().hasOnly(['businessId','locationId','queueId','windowId','staffId','shiftId','type','fromState','toState','source','occurredAt','entryId','sessionId'])
+        && scope(request.resource.data) && text(request.resource.data.windowId)
+        && (
+          (text(request.resource.data.staffId) && text(request.resource.data.shiftId)
+            && request.resource.data.type in ['shift_started','shift_ended','window_paused','window_resumed','customer_called','customer_completed']
+            && request.resource.data.fromState in ['available','active','paused']
+            && request.resource.data.toState in ['available','active','paused']
+            && request.resource.data.source in ['staff','manager'])
+          ||
+          (request.resource.data.staffId == null && request.resource.data.shiftId == null
+            && request.resource.data.type == 'window_disabled'
+            && request.resource.data.fromState == 'available' && request.resource.data.toState == 'inactive'
+            && request.resource.data.source == 'manager')
+          ||
+          (request.resource.data.staffId == null && request.resource.data.shiftId == null
+            && request.resource.data.type == 'window_enabled'
+            && request.resource.data.fromState == 'inactive' && request.resource.data.toState == 'available'
+            && request.resource.data.source == 'manager')
+        ) && request.resource.data.occurredAt == request.time;
+      allow update, delete: if false;
+    }
+    match /queue/{document} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
+
