@@ -53,7 +53,7 @@
       line-height: 1.5;
     }
 
-    #joinButton {
+    .primary-button {
       width: 100%;
       margin-top: 30px;
       border: none;
@@ -66,24 +66,60 @@
       color: white;
     }
 
-    #joinButton:disabled {
+    .primary-button:disabled {
       opacity: 0.5;
       cursor: default;
     }
 
-    #queueScreen {
+    .secondary-button {
+      width: 100%;
+      margin-top: 14px;
+      border: 1px solid #ddd;
+      border-radius: 14px;
+      padding: 15px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      background: white;
+      color: #333;
+    }
+
+    .danger-button {
+      color: #9a1c1c;
+    }
+
+    #queueScreen,
+    #completedScreen,
+    #cancelledScreen,
+    #loadingScreen {
       display: none;
+    }
+
+    .ticket-label {
+      color: #777;
+      font-size: 14px;
+      margin-top: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    #ticketNumber,
+    #calledTicket {
+      font-size: 30px;
+      font-weight: bold;
+      margin-top: 4px;
     }
 
     .youre-in {
       font-size: 18px;
-      margin-bottom: 8px;
+      margin-top: 22px;
+      margin-bottom: 4px;
     }
 
     #position {
       font-size: 72px;
       font-weight: bold;
-      margin: 10px 0;
+      margin: 8px 0;
     }
 
     #ahead {
@@ -113,10 +149,51 @@
       line-height: 1.5;
     }
 
+    .complete-title {
+      font-size: 32px;
+      font-weight: bold;
+      margin: 18px 0 10px;
+    }
+
+    .complete-text {
+      color: #555;
+      font-size: 17px;
+      line-height: 1.5;
+    }
+
+    .summary {
+      margin-top: 26px;
+      text-align: left;
+      background: #f7f7f7;
+      border-radius: 16px;
+      padding: 18px;
+    }
+
+    .summary-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 20px;
+      padding: 8px 0;
+    }
+
+    .summary-label {
+      color: #666;
+    }
+
+    .summary-value {
+      font-weight: bold;
+    }
+
     .error {
       color: #b00020;
       margin-top: 18px;
       font-size: 15px;
+    }
+
+    .loading-text {
+      color: #666;
+      font-size: 17px;
+      line-height: 1.5;
     }
   </style>
 </head>
@@ -126,6 +203,17 @@
   <div class="app">
 
     <div class="card">
+
+      <div id="loadingScreen">
+
+        <div class="bell">🔔</div>
+
+        <div class="loading-text">
+          Checking your place in line...
+        </div>
+
+      </div>
+
 
       <div id="joinScreen">
 
@@ -138,11 +226,17 @@
           We'll cue you.
         </div>
 
-        <button id="joinButton">
+        <button
+          id="joinButton"
+          class="primary-button"
+        >
           JOIN QUEUE
         </button>
 
-        <div id="errorMessage" class="error"></div>
+        <div
+          id="errorMessage"
+          class="error"
+        ></div>
 
       </div>
 
@@ -152,6 +246,14 @@
         <div id="waitingMessage">
 
           <div class="bell">🔔</div>
+
+          <div class="ticket-label">
+            Your ticket
+          </div>
+
+          <div id="ticketNumber">
+            A101
+          </div>
 
           <div class="youre-in">
             You're in!
@@ -166,9 +268,16 @@
           </div>
 
           <div class="walk-away">
-            You can walk away.<br>
-            We'll keep your place.
+            Your place is saved on this device.<br>
+            You can close this page and come back anytime.
           </div>
+
+          <button
+            id="leaveButton"
+            class="secondary-button danger-button"
+          >
+            LEAVE QUEUE
+          </button>
 
         </div>
 
@@ -176,6 +285,14 @@
         <div id="calledMessage">
 
           <div class="bell">🔔</div>
+
+          <div class="ticket-label">
+            Your ticket
+          </div>
+
+          <div id="calledTicket">
+            A101
+          </div>
 
           <div class="called-title">
             It's your turn!
@@ -186,6 +303,93 @@
           </div>
 
         </div>
+
+      </div>
+
+
+      <div id="completedScreen">
+
+        <div class="bell">🔔</div>
+
+        <div class="complete-title">
+          You're all done
+        </div>
+
+        <div class="complete-text">
+          Thanks for using TurnCue.
+        </div>
+
+        <div class="summary">
+
+          <div class="summary-row">
+            <span class="summary-label">
+              Wait time
+            </span>
+
+            <span
+              id="waitTime"
+              class="summary-value"
+            >
+              --
+            </span>
+          </div>
+
+          <div class="summary-row">
+            <span class="summary-label">
+              Service time
+            </span>
+
+            <span
+              id="serviceTime"
+              class="summary-value"
+            >
+              --
+            </span>
+          </div>
+
+          <div class="summary-row">
+            <span class="summary-label">
+              Total time
+            </span>
+
+            <span
+              id="totalTime"
+              class="summary-value"
+            >
+              --
+            </span>
+          </div>
+
+        </div>
+
+        <button
+          id="backHomeButton"
+          class="primary-button"
+        >
+          BACK TO HOME
+        </button>
+
+      </div>
+
+
+      <div id="cancelledScreen">
+
+        <div class="bell">🔔</div>
+
+        <div class="complete-title">
+          You've left the queue
+        </div>
+
+        <div class="complete-text">
+          Your place is no longer being held.
+        </div>
+
+        <button
+          id="cancelledHomeButton"
+          class="primary-button"
+        >
+          BACK TO HOME
+        </button>
 
       </div>
 
@@ -201,14 +405,16 @@
 
     import {
       getFirestore,
+      doc,
+      getDoc,
       collection,
-      addDoc,
-      serverTimestamp,
       query,
       where,
       orderBy,
       onSnapshot,
-      doc
+      serverTimestamp,
+      runTransaction,
+      updateDoc
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
 
@@ -226,182 +432,1050 @@
     const db = getFirestore(app);
 
 
-    const joinButton =
-      document.getElementById("joinButton");
+    const BUSINESS_ID =
+      "demo-business";
+
+    const LOCATION_ID =
+      "main-location";
+
+    const QUEUE_ID =
+      "main-queue";
+
+
+    const STORAGE_KEY =
+      "turncue_active_entry";
+
+
+    const loadingScreen =
+      document.getElementById(
+        "loadingScreen"
+      );
 
     const joinScreen =
-      document.getElementById("joinScreen");
+      document.getElementById(
+        "joinScreen"
+      );
 
     const queueScreen =
-      document.getElementById("queueScreen");
+      document.getElementById(
+        "queueScreen"
+      );
+
+    const completedScreen =
+      document.getElementById(
+        "completedScreen"
+      );
+
+    const cancelledScreen =
+      document.getElementById(
+        "cancelledScreen"
+      );
 
     const waitingMessage =
-      document.getElementById("waitingMessage");
+      document.getElementById(
+        "waitingMessage"
+      );
 
     const calledMessage =
-      document.getElementById("calledMessage");
+      document.getElementById(
+        "calledMessage"
+      );
+
+    const joinButton =
+      document.getElementById(
+        "joinButton"
+      );
+
+    const leaveButton =
+      document.getElementById(
+        "leaveButton"
+      );
+
+    const backHomeButton =
+      document.getElementById(
+        "backHomeButton"
+      );
+
+    const cancelledHomeButton =
+      document.getElementById(
+        "cancelledHomeButton"
+      );
+
+    const ticketNumber =
+      document.getElementById(
+        "ticketNumber"
+      );
+
+    const calledTicket =
+      document.getElementById(
+        "calledTicket"
+      );
 
     const position =
-      document.getElementById("position");
+      document.getElementById(
+        "position"
+      );
 
     const ahead =
-      document.getElementById("ahead");
+      document.getElementById(
+        "ahead"
+      );
+
+    const waitTime =
+      document.getElementById(
+        "waitTime"
+      );
+
+    const serviceTime =
+      document.getElementById(
+        "serviceTime"
+      );
+
+    const totalTime =
+      document.getElementById(
+        "totalTime"
+      );
 
     const errorMessage =
-      document.getElementById("errorMessage");
+      document.getElementById(
+        "errorMessage"
+      );
 
 
-    let myDocumentId = null;
+    let currentSessionId = null;
+    let myEntryId = null;
+
+    let unsubscribeQueue = null;
+    let unsubscribeEntry = null;
 
 
-    joinButton.addEventListener("click", async () => {
+    function showOnly(screen) {
 
-      joinButton.disabled = true;
-      joinButton.textContent = "JOINING...";
-      errorMessage.textContent = "";
+      loadingScreen.style.display =
+        "none";
+
+      joinScreen.style.display =
+        "none";
+
+      queueScreen.style.display =
+        "none";
+
+      completedScreen.style.display =
+        "none";
+
+      cancelledScreen.style.display =
+        "none";
+
+
+      screen.style.display =
+        "block";
+    }
+
+
+    function generateEntryId() {
+
+      if (
+        window.crypto &&
+        crypto.randomUUID
+      ) {
+
+        return crypto.randomUUID();
+      }
+
+
+      return (
+        Date.now().toString(36) +
+        "-" +
+        Math.random()
+          .toString(36)
+          .substring(2)
+      );
+    }
+
+
+    function saveActiveEntry(
+      sessionId,
+      entryId
+    ) {
+
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          sessionId: sessionId,
+          entryId: entryId
+        })
+      );
+    }
+
+
+    function getSavedEntry() {
 
       try {
 
-        const myDocument = await addDoc(
-          collection(db, "queue"),
-          {
-            status: "waiting",
-            joinedAt: serverTimestamp()
-          }
-        );
+        const value =
+          localStorage.getItem(
+            STORAGE_KEY
+          );
 
-        myDocumentId = myDocument.id;
 
-        joinScreen.style.display = "none";
-        queueScreen.style.display = "block";
+        if (!value) {
+          return null;
+        }
 
-        startQueueListener();
-        startStatusListener();
+
+        return JSON.parse(value);
 
       } catch (error) {
 
-        console.error("Join queue error:", error);
+        localStorage.removeItem(
+          STORAGE_KEY
+        );
 
-        errorMessage.textContent =
-          "Something went wrong. Please try again.";
+        return null;
+      }
+    }
 
-        joinButton.disabled = false;
-        joinButton.textContent = "JOIN QUEUE";
+
+    function clearSavedEntry() {
+
+      localStorage.removeItem(
+        STORAGE_KEY
+      );
+    }
+
+
+    async function initializeCustomerPage() {
+
+      showOnly(loadingScreen);
+
+
+      const savedEntry =
+        getSavedEntry();
+
+
+      if (savedEntry) {
+
+        const restored =
+          await restoreSavedEntry(
+            savedEntry
+          );
+
+
+        if (restored) {
+          return;
+        }
       }
 
-    });
+
+      showOnly(joinScreen);
+    }
 
 
-    function startQueueListener() {
+    async function restoreSavedEntry(
+      savedEntry
+    ) {
 
-      const queueQuery = query(
-        collection(db, "queue"),
-        where("status", "==", "waiting"),
-        orderBy("joinedAt", "asc")
-      );
+      try {
+
+        const entryRef =
+          doc(
+            db,
+            "sessions",
+            savedEntry.sessionId,
+            "entries",
+            savedEntry.entryId
+          );
 
 
-      onSnapshot(
+        const snapshot =
+          await getDoc(entryRef);
 
-        queueQuery,
 
-        (snapshot) => {
+        if (!snapshot.exists()) {
 
-          if (!myDocumentId) {
-            return;
-          }
+          clearSavedEntry();
 
-          const myIndex =
-            snapshot.docs.findIndex(
-              customer => customer.id === myDocumentId
+          return false;
+        }
+
+
+        const data =
+          snapshot.data();
+
+
+        if (
+          data.status === "waiting" ||
+          data.status === "called"
+        ) {
+
+          currentSessionId =
+            savedEntry.sessionId;
+
+          myEntryId =
+            savedEntry.entryId;
+
+
+          showOnly(queueScreen);
+
+          startListeners();
+
+          return true;
+        }
+
+
+        /*
+          Completed and cancelled entries are not
+          restored as active queue positions.
+
+          Their active-device marker is cleared.
+        */
+
+        clearSavedEntry();
+
+        return false;
+
+      } catch (error) {
+
+        console.error(
+          "Restore error:",
+          error
+        );
+
+
+        /*
+          Do NOT clear local storage just because
+          the network failed.
+
+          That helps prevent a temporary connection
+          problem from appearing to lose the spot.
+        */
+
+        errorMessage.textContent =
+          "We couldn't check your place right now. Please try again.";
+
+        showOnly(joinScreen);
+
+        return true;
+      }
+    }
+
+
+    joinButton.addEventListener(
+      "click",
+      async () => {
+
+        joinButton.disabled =
+          true;
+
+        joinButton.textContent =
+          "JOINING...";
+
+        errorMessage.textContent =
+          "";
+
+
+        try {
+
+          /*
+            First find the queue's current
+            operational session.
+          */
+
+          const queueRef =
+            doc(
+              db,
+              "queues",
+              QUEUE_ID
             );
 
 
-          if (myIndex === -1) {
-            return;
+          const queueSnapshot =
+            await getDoc(queueRef);
+
+
+          if (!queueSnapshot.exists()) {
+
+            throw new Error(
+              "Queue has not been set up yet."
+            );
           }
 
 
-          const myPosition = myIndex + 1;
-
-          position.textContent =
-            "#" + myPosition;
+          const queueData =
+            queueSnapshot.data();
 
 
-          if (myPosition === 1) {
+          if (
+            !queueData.currentSessionId
+          ) {
 
-            ahead.textContent =
-              "You're first in line.";
-
-          } else if (myPosition === 2) {
-
-            ahead.textContent =
-              "1 person ahead of you.";
-
-          } else {
-
-            ahead.textContent =
-              (myPosition - 1) +
-              " people ahead of you.";
-
+            throw new Error(
+              "There is no open queue session."
+            );
           }
 
-        },
 
-        (error) => {
+          currentSessionId =
+            queueData.currentSessionId;
+
+
+          const sessionRef =
+            doc(
+              db,
+              "sessions",
+              currentSessionId
+            );
+
+
+          const newEntryId =
+            generateEntryId();
+
+
+          const entryRef =
+            doc(
+              db,
+              "sessions",
+              currentSessionId,
+              "entries",
+              newEntryId
+            );
+
+
+          /*
+            Ticket assignment is transactional.
+
+            Customer A and Customer B cannot both
+            receive A101 simply because they joined
+            at nearly the same moment.
+          */
+
+          await runTransaction(
+            db,
+            async (transaction) => {
+
+              const sessionSnapshot =
+                await transaction.get(
+                  sessionRef
+                );
+
+
+              if (
+                !sessionSnapshot.exists()
+              ) {
+
+                throw new Error(
+                  "Queue session does not exist."
+                );
+              }
+
+
+              const sessionData =
+                sessionSnapshot.data();
+
+
+              if (
+                sessionData.status !==
+                "open"
+              ) {
+
+                throw new Error(
+                  "This queue is not open."
+                );
+              }
+
+
+              const nextTicketNumber =
+                sessionData
+                  .nextTicketNumber;
+
+
+              const ticketPrefix =
+                sessionData
+                  .ticketPrefix ||
+                "A";
+
+
+              const ticketLabel =
+                ticketPrefix +
+                nextTicketNumber;
+
+
+              transaction.set(
+                entryRef,
+                {
+                  businessId:
+                    BUSINESS_ID,
+
+                  locationId:
+                    LOCATION_ID,
+
+                  queueId:
+                    QUEUE_ID,
+
+                  sessionId:
+                    currentSessionId,
+
+                  ticketNumber:
+                    nextTicketNumber,
+
+                  ticketLabel:
+                    ticketLabel,
+
+                  status:
+                    "waiting",
+
+                  joinedAt:
+                    serverTimestamp(),
+
+                  calledAt:
+                    null,
+
+                  completedAt:
+                    null,
+
+                  cancelledAt:
+                    null
+                }
+              );
+
+
+              transaction.update(
+                sessionRef,
+                {
+                  nextTicketNumber:
+                    nextTicketNumber + 1
+                }
+              );
+            }
+          );
+
+
+          myEntryId =
+            newEntryId;
+
+
+          /*
+            Save immediately after successful
+            Firestore creation.
+          */
+
+          saveActiveEntry(
+            currentSessionId,
+            myEntryId
+          );
+
+
+          showOnly(queueScreen);
+
+          startListeners();
+
+        } catch (error) {
+
           console.error(
-            "Queue listener error:",
+            "Join queue error:",
             error
           );
+
+
+          errorMessage.textContent =
+            error.message ||
+            "Something went wrong. Please try again.";
+
+
+          joinButton.disabled =
+            false;
+
+          joinButton.textContent =
+            "JOIN QUEUE";
         }
+      }
+    );
 
-      );
 
+    function startListeners() {
+
+      if (
+        !currentSessionId ||
+        !myEntryId
+      ) {
+        return;
+      }
+
+
+      if (unsubscribeQueue) {
+        unsubscribeQueue();
+      }
+
+      if (unsubscribeEntry) {
+        unsubscribeEntry();
+      }
+
+
+      const entriesRef =
+        collection(
+          db,
+          "sessions",
+          currentSessionId,
+          "entries"
+        );
+
+
+      const queueQuery =
+        query(
+          entriesRef,
+          where(
+            "status",
+            "==",
+            "waiting"
+          ),
+          orderBy(
+            "joinedAt",
+            "asc"
+          )
+        );
+
+
+      unsubscribeQueue =
+        onSnapshot(
+
+          queueQuery,
+
+          (snapshot) => {
+
+            const myIndex =
+              snapshot.docs.findIndex(
+                customer =>
+                  customer.id ===
+                  myEntryId
+              );
+
+
+            if (myIndex === -1) {
+              return;
+            }
+
+
+            const myPosition =
+              myIndex + 1;
+
+
+            position.textContent =
+              "#" + myPosition;
+
+
+            if (myPosition === 1) {
+
+              ahead.textContent =
+                "You're first in line.";
+
+            } else if (
+              myPosition === 2
+            ) {
+
+              ahead.textContent =
+                "1 person ahead of you.";
+
+            } else {
+
+              ahead.textContent =
+                (myPosition - 1) +
+                " people ahead of you.";
+            }
+          },
+
+          (error) => {
+
+            console.error(
+              "Queue listener error:",
+              error
+            );
+          }
+        );
+
+
+      const myEntryRef =
+        doc(
+          db,
+          "sessions",
+          currentSessionId,
+          "entries",
+          myEntryId
+        );
+
+
+      unsubscribeEntry =
+        onSnapshot(
+
+          myEntryRef,
+
+          (snapshot) => {
+
+            if (!snapshot.exists()) {
+              return;
+            }
+
+
+            const data =
+              snapshot.data();
+
+
+            if (data.ticketLabel) {
+
+              ticketNumber.textContent =
+                data.ticketLabel;
+
+              calledTicket.textContent =
+                data.ticketLabel;
+            }
+
+
+            handleStatus(data);
+          },
+
+          (error) => {
+
+            console.error(
+              "Entry listener error:",
+              error
+            );
+          }
+        );
     }
 
 
-    function startStatusListener() {
+    function handleStatus(data) {
 
-      const myDoc =
-        doc(db, "queue", myDocumentId);
+      if (
+        data.status === "waiting"
+      ) {
 
+        showOnly(queueScreen);
 
-      onSnapshot(
+        waitingMessage.style.display =
+          "block";
 
-        myDoc,
+        calledMessage.style.display =
+          "none";
 
-        (snapshot) => {
-
-          if (!snapshot.exists()) {
-            return;
-          }
-
-
-          const data = snapshot.data();
+        return;
+      }
 
 
-          if (data.status === "called") {
+      if (
+        data.status === "called"
+      ) {
 
-            waitingMessage.style.display =
-              "none";
+        showOnly(queueScreen);
 
-            calledMessage.style.display =
-              "block";
+        waitingMessage.style.display =
+          "none";
 
-          }
+        calledMessage.style.display =
+          "block";
 
-        },
+        return;
+      }
 
-        (error) => {
-          console.error(
-            "Status listener error:",
-            error
-          );
+
+      if (
+        data.status === "completed"
+      ) {
+
+        clearSavedEntry();
+
+        calculateSummary(data);
+
+        showOnly(
+          completedScreen
+        );
+
+        stopListeners();
+
+        return;
+      }
+
+
+      if (
+        data.status === "cancelled"
+      ) {
+
+        clearSavedEntry();
+
+        showOnly(
+          cancelledScreen
+        );
+
+        stopListeners();
+      }
+    }
+
+
+    leaveButton.addEventListener(
+      "click",
+      async () => {
+
+        if (
+          !currentSessionId ||
+          !myEntryId
+        ) {
+          return;
         }
 
-      );
 
+        const confirmed =
+          window.confirm(
+            "Leave the queue? Your place will no longer be held."
+          );
+
+
+        if (!confirmed) {
+          return;
+        }
+
+
+        leaveButton.disabled =
+          true;
+
+
+        try {
+
+          const entryRef =
+            doc(
+              db,
+              "sessions",
+              currentSessionId,
+              "entries",
+              myEntryId
+            );
+
+
+          await updateDoc(
+            entryRef,
+            {
+              status:
+                "cancelled",
+
+              cancelledAt:
+                serverTimestamp()
+            }
+          );
+
+        } catch (error) {
+
+          console.error(
+            "Leave queue error:",
+            error
+          );
+
+          leaveButton.disabled =
+            false;
+
+          window.alert(
+            "We couldn't remove you from the queue. Please try again."
+          );
+        }
+      }
+    );
+
+
+    function calculateSummary(data) {
+
+      /*
+        Firestore Timestamp objects have toMillis().
+        If a timestamp is missing, we show "--".
+      */
+
+      if (
+        data.joinedAt &&
+        data.calledAt
+      ) {
+
+        const milliseconds =
+          data.calledAt.toMillis() -
+          data.joinedAt.toMillis();
+
+
+        waitTime.textContent =
+          formatDuration(
+            milliseconds
+          );
+      }
+
+
+      if (
+        data.calledAt &&
+        data.completedAt
+      ) {
+
+        const milliseconds =
+          data.completedAt.toMillis() -
+          data.calledAt.toMillis();
+
+
+        serviceTime.textContent =
+          formatDuration(
+            milliseconds
+          );
+      }
+
+
+      if (
+        data.joinedAt &&
+        data.completedAt
+      ) {
+
+        const milliseconds =
+          data.completedAt.toMillis() -
+          data.joinedAt.toMillis();
+
+
+        totalTime.textContent =
+          formatDuration(
+            milliseconds
+          );
+      }
     }
+
+
+    function formatDuration(
+      milliseconds
+    ) {
+
+      const totalMinutes =
+        Math.max(
+          0,
+          Math.round(
+            milliseconds /
+            60000
+          )
+        );
+
+
+      if (totalMinutes < 1) {
+
+        return "< 1 min";
+      }
+
+
+      if (totalMinutes < 60) {
+
+        return (
+          totalMinutes +
+          (
+            totalMinutes === 1
+              ? " min"
+              : " mins"
+          )
+        );
+      }
+
+
+      const hours =
+        Math.floor(
+          totalMinutes / 60
+        );
+
+      const minutes =
+        totalMinutes % 60;
+
+
+      if (minutes === 0) {
+
+        return (
+          hours +
+          (
+            hours === 1
+              ? " hr"
+              : " hrs"
+          )
+        );
+      }
+
+
+      return (
+        hours +
+        (
+          hours === 1
+            ? " hr "
+            : " hrs "
+        ) +
+        minutes +
+        " mins"
+      );
+    }
+
+
+    function stopListeners() {
+
+      if (unsubscribeQueue) {
+
+        unsubscribeQueue();
+
+        unsubscribeQueue =
+          null;
+      }
+
+
+      if (unsubscribeEntry) {
+
+        unsubscribeEntry();
+
+        unsubscribeEntry =
+          null;
+      }
+    }
+
+
+    function resetToHome() {
+
+      stopListeners();
+
+      clearSavedEntry();
+
+      currentSessionId =
+        null;
+
+      myEntryId =
+        null;
+
+      joinButton.disabled =
+        false;
+
+      joinButton.textContent =
+        "JOIN QUEUE";
+
+      leaveButton.disabled =
+        false;
+
+      errorMessage.textContent =
+        "";
+
+      waitTime.textContent =
+        "--";
+
+      serviceTime.textContent =
+        "--";
+
+      totalTime.textContent =
+        "--";
+
+      showOnly(joinScreen);
+    }
+
+
+    backHomeButton.addEventListener(
+      "click",
+      resetToHome
+    );
+
+
+    cancelledHomeButton.addEventListener(
+      "click",
+      resetToHome
+    );
+
+
+    initializeCustomerPage();
 
   </script>
 
