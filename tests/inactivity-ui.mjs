@@ -1,0 +1,14 @@
+import fs from "node:fs";
+import assert from "node:assert/strict";
+import { pendingCheckDecision, isInactivityDue } from "../inactivity.js";
+const staff = fs.readFileSync(new URL("../staff.html", import.meta.url), "utf8");
+const business = fs.readFileSync(new URL("../business.html", import.meta.url), "utf8");
+assert(staff.includes("Hi \" + person.name + \", are you still at \" + displayWindowLabel(window.name)"), "Pending check must have staff/window prompt.");
+assert(staff.includes("YES, I’M HERE") && staff.includes("confirmInactivityCheck"));
+assert(business.includes("Inactivity check pending") && business.includes("Auto-paused after no response"));
+assert(staff.includes("setInterval(evaluateInactivity, 30000)") && business.includes("setInterval(evaluateInactivity, 30000)"));
+const pending = { inactivityCheckState: "pending", inactivityCheckDeadline: { toMillis: () => 1 }, state: "active", currentEntryId: null };
+assert.equal(pendingCheckDecision(pending, false, 2), "cancel");
+assert.equal(pendingCheckDecision(pending, true, 2), "auto_pause");
+assert.equal(isInactivityDue({ active: true, state: "active", currentShiftId: "s", currentStaffId: "p", currentEntryId: "e" }, true, { confidence: "early", paceMinutes: 8 }), false);
+console.log("Batch 3B-2 focused UI/evaluator tests: PASS");

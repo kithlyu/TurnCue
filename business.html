@@ -5,6 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TurnCue Business</title>
   <link rel="stylesheet" href="turncue.css">
+  <style>
+    #addWindowsModal { width: min(460px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; margin: auto; padding: 28px; border: 0; border-radius: 20px; box-shadow: 0 16px 64px #0005; }
+    #addWindowsModal::backdrop { background: #0009; }
+    #windowCreateStatus:empty { display: none; }
+  </style>
 </head>
 <body>
 <main>
@@ -20,6 +25,7 @@
     <div id="sessionStatus">Setting up TurnCue...</div>
     <p id="sessionDetail" class="muted"></p>
   </section>
+  <section class="card"><h2>ETA status</h2><div id="etaSummary" class="muted">Loading service pace...</div></section>
   <section class="card">
     <h2>Staff roster</h2>
     <form id="staffForm">
@@ -29,37 +35,60 @@
       <select id="staffRole"><option value="staff">Staff</option><option value="manager">Manager</option></select>
       <div class="actions"><button type="submit">REGISTER STAFF</button></div>
     </form>
+    <div class="actions"><button id="downloadStaffTemplate" type="button">DOWNLOAD CSV TEMPLATE</button></div>
+    <form id="staffImportForm">
+      <label for="staffCsv">Staff CSV</label><input id="staffCsv" type="file" accept=".csv,text/csv">
+      <div class="actions"><button type="submit">PREVIEW</button><button id="createStaffImport" type="button" disabled>CREATE STAFF</button></div>
+      <div id="staffImportPreview" class="muted" aria-live="polite"></div>
+    </form>
     <p class="notice">Managers can also work windows using their Staff ID. End a shift before marking a staff member inactive.</p>
     <div id="roster">Loading staff...</div>
   </section>
   <section class="card">
     <h2>Windows</h2>
-    <form id="windowForm">
-      <label for="windowName">New window label</label>
-      <input id="windowName" maxlength="80" required placeholder="Window 1">
-      <div class="actions"><button type="submit">ADD WINDOW</button></div>
-    </form>
+    <button id="addWindows" type="button">ADD WINDOWS</button>
     <p id="capacity" class="muted"></p>
     <div id="windows">Loading windows...</div>
   </section>
   <section class="card"><h2 id="waitingTitle">Waiting</h2><div id="waiting">Loading queue...</div></section>
   <section class="card"><h2 id="calledTitle">Called</h2><div id="called">Loading called customers...</div></section>
 </main>
+<dialog id="addWindowsModal" aria-labelledby="addWindowsTitle">
+  <h2 id="addWindowsTitle">Add Windows</h2>
+  <form id="bulkWindowForm">
+    <label for="bulkMode">Window series</label>
+    <select id="bulkMode" required autofocus><option value="">Choose a series</option><option value="numbered">Numbered</option><option value="letters">Lettered</option></select>
+    <label for="bulkQuantity">How many additional windows?</label>
+    <input id="bulkQuantity" type="number" min="1" max="26" step="1" required>
+    <div id="bulkPreview" aria-live="polite"></div>
+    <p id="windowCreateStatus" role="status" aria-live="polite"></p>
+    <div class="actions"><button id="cancelWindows" type="button" class="secondary">CANCEL</button><button id="bulkCreate" type="submit" disabled>CREATE WINDOWS</button></div>
+  </form>
+</dialog>
 <script type="module">
+import { displayWindowLabel } from "./window-label.js";
+import { windowStatus, canConfigureWindow } from "./window-operations.js";
 import {
   initializeTurnCue, registerStaff, setStaffActive, saveWindow, changeWindowState,
-  callNext, completeCustomer, watchStaff, watchWindows, watchQueue, watchEntries,
-  element, actionButton
+  callNext, completeCustomer, watchStaff, watchWindows, watchQueue, watchEntries, startInactivityCheck, resolveExpiredInactivityCheck, cancelInactivityCheckIfQueueEmpty, bulkCreateWindows,
+  watchServiceSamples, element, actionButton
 } from "./turncue.js";
+import { learnPace } from "./eta.js";
+import { generateWindowLabels, labelConflicts } from "./bulk-setup.js";
+import { CSV_TEMPLATE, parseStaffCsv, createImportedStaff } from "./staff-import.js";
 
 const $ = id => document.getElementById(id);
 let roster = [], windows = [], waiting = [], called = [];
 let sessionId = null, busy = false, stopEntries = [];
+let serviceSamples = [], inactivityTimer = null, evaluating = false;
+let bulkLabels = [];
+let staffImport = null, staffImportDone = false;
 const ready = { staff: false, windows: false, queue: false, waiting: false, called: false };
 const operational = () => ready.staff && ready.windows && ready.queue;
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
+  if ($("addWindowsModal").open) { $("windowCreateStatus").textContent = text; $("windowCreateStatus").classList.toggle("error", error); }
 }
 function listenError(kind) {
   return error => {
@@ -86,12 +115,39 @@ async function perform(work, success) {
   }
 }
 function render() {
-  for (const form of [$("staffForm"), $("windowForm")]) {
+  for (const form of [$("staffForm"), $("bulkWindowForm"), $("staffImportForm")]) {
     for (const control of form.elements) control.disabled = busy || !operational();
   }
+  $("createStaffImport").disabled = busy || !operational() || !staffImport || staffImportDone || !staffImport.valid.length || Boolean(staffImport.invalid.length);
+  $("addWindows").disabled = busy || !operational();
+  $("cancelWindows").disabled = busy;
+  $("bulkCreate").disabled = busy || !operational() || !bulkLabels.length || Boolean(labelConflicts(bulkLabels, windows).length);
   renderRoster();
   renderWindows();
   renderEntries();
+  renderEtaSummary();
+  syncInactivityEvaluator();
+}
+async function evaluateInactivity() {
+  if (evaluating || !operational() || !sessionId) return;
+  evaluating = true;
+  try { const learned = learnPace(serviceSamples); for (const w of windows.filter(w => w.retired !== true && w.currentShiftId && w.active)) {
+    if (w.inactivityCheckState === "pending") {
+      if (!waiting.length) await cancelInactivityCheckIfQueueEmpty(w.id, w.currentShiftId, sessionId, w.inactivityCheckId);
+      else await resolveExpiredInactivityCheck(w.id, w.currentShiftId, sessionId, w.inactivityCheckId);
+    } else if (learned.confidence !== "calibrating" && waiting.length && w.state === "active" && !w.currentEntryId) await startInactivityCheck(w.id, w.currentShiftId, sessionId, learned);
+  }} catch (error) { console.warn("Inactivity evaluation:", error); } finally { evaluating = false; }
+}
+function syncInactivityEvaluator() {
+  if (!operational() || !sessionId) return;
+  if (!inactivityTimer) { evaluateInactivity(); inactivityTimer = setInterval(evaluateInactivity, 30000); }
+}
+function renderEtaSummary() {
+  const learned = learnPace(serviceSamples);
+  const active = windows.filter(w => w.retired !== true && w.active && w.state === "active" && w.currentShiftId).length;
+  $("etaSummary").textContent = learned.confidence === "calibrating"
+    ? "ETA status: Calibrating · " + learned.count + " of 3 clean completions · Active windows: " + active
+    : "Learned pace: ~" + Math.round(learned.paceMinutes) + " min/customer · ETA confidence: " + (learned.confidence === "stable" ? "Stable" : "Early") + " · Active windows: " + active;
 }
 function renderRoster() {
   const host = $("roster");
@@ -110,35 +166,33 @@ function renderRoster() {
 function renderWindows() {
   const host = $("windows");
   host.replaceChildren();
-  const configured = windows.filter(w => w.active).length;
-  const active = windows.filter(w => w.active && w.state === "active" && w.currentShiftId).length;
+  const configured = windows.filter(w => w.retired !== true).length;
+  const active = windows.filter(w => w.retired !== true && w.active && w.state === "active" && w.currentShiftId).length;
   $("capacity").textContent = ready.windows ? configured + " configured · " + active + " currently active" : "Loading capacity...";
   if (!ready.windows) { host.textContent = "Windows unavailable or loading."; return; }
-  if (!windows.length) { host.textContent = "Add a window, then ask staff to choose it on Start Shift."; return; }
-  for (const window of windows) {
+  if (!windows.some(w => w.retired !== true)) { host.textContent = "Add a window, then ask staff to choose it on Start Shift."; return; }
+  for (const window of windows.filter(w => w.retired !== true)) {
     const card = element("div", undefined, "window");
     const person = roster.find(p => p.id === window.currentStaffId);
-    card.append(element("h3", window.name), element("span", window.state, "state"));
+    card.append(element("h3", displayWindowLabel(window.name)), element("span", windowStatus(window), "state"));
     card.append(element("p", person ? person.name + " · " + person.staffCode : window.currentStaffId ? "Loading assignee..." : "No staff assigned", "muted"));
     if (window.currentEntryId) card.append(element("p", "Called: " + window.currentTicketLabel, "ticket"));
+    if (window.inactivityCheckState === "pending") card.append(element("p", "Inactivity check pending", "notice"));
+    if (window.pauseSource === "inactivity_check" || window.reviewFlagType === "inactivity_check") card.append(element("p", "Auto-paused after no response · Manager review needed", "error"));
     const actions = element("div", undefined, "actions");
     const disabled = busy || !operational();
     if (window.currentShiftId) {
       actions.append(
-        actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId, "manager"), ticket => ticket ? "Called " + ticket + " to " + window.name + "." : "No one is waiting."), disabled || !ready.waiting || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)),
         actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause", "manager")), disabled),
         actionButton("END SHIFT", () => {
-          if (confirm("End " + (person?.name || "this staff member") + "'s shift at " + window.name + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end", "manager"), "Shift ended. The window is available.");
+          if (confirm("End " + (person?.name || "this staff member") + "'s shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end", "manager"), "Shift ended. The window is OPEN.");
         }, disabled || Boolean(window.currentEntryId))
       );
+      if (window.state === "active" && !window.currentEntryId) actions.prepend(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId, "manager"), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting."), disabled || !ready.waiting || !sessionId));
       if (window.currentEntryId) actions.prepend(actionButton("COMPLETE " + window.currentTicketLabel, () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId, "manager"), "Customer completed."), disabled));
-    } else {
+    } else if (canConfigureWindow(window)) {
       actions.append(
-        actionButton("RENAME", () => {
-          const name = prompt("Window label", window.name);
-          if (name !== null) perform(() => saveWindow(window.id, name, window.active));
-        }, disabled),
-        actionButton(window.active ? "DISABLE WINDOW" : "ENABLE WINDOW", () => perform(() => saveWindow(window.id, window.name, !window.active)), disabled)
+        actionButton(window.active ? "CLOSE WINDOW" : "OPEN WINDOW", () => perform(() => saveWindow(window.id, window.name, !window.active)), disabled)
       );
     }
     card.append(actions);
@@ -157,7 +211,7 @@ function renderEntries() {
     list.forEach((entry, index) => {
       const row = element("div", undefined, "row");
       const info = element("div");
-      info.append(element("strong", entry.ticketLabel, "ticket"), element("p", kind === "waiting" ? "Position " + (index + 1) : entry.calledWindowLabel || "Earlier Batch 1 call · no window", "muted"));
+      info.append(element("strong", entry.ticketLabel, "ticket"), element("p", kind === "waiting" ? "Position " + (index + 1) : (entry.calledWindowLabel ? displayWindowLabel(entry.calledWindowLabel) : "Earlier Batch 1 call · no window"), "muted"));
       row.append(info);
       if (kind === "called") row.append(actionButton("COMPLETE", () => perform(() => completeCustomer(entry.sessionId, entry.id, entry.calledWindowId || null, entry.calledByShiftId || null, "manager"), "Customer completed."), busy || !operational()));
       host.append(row);
@@ -169,16 +223,70 @@ $("staffForm").addEventListener("submit", event => {
   const name = $("staffName").value, role = $("staffRole").value;
   perform(async () => { const code = await registerStaff(name, role); $("staffForm").reset(); return code; }, code => "Registered " + name.trim() + ". Staff ID: " + code + ". Share this ID with the staff member.");
 });
-$("windowForm").addEventListener("submit", event => {
+$("downloadStaffTemplate").addEventListener("click", () => { const url = URL.createObjectURL(new Blob([CSV_TEMPLATE], { type: "text/csv;charset=utf-8" })); const link = document.createElement("a"); link.href = url; link.download = "turncue-staff-template.csv"; link.click(); URL.revokeObjectURL(url); });
+$("staffCsv").addEventListener("change", () => { staffImport = null; staffImportDone = false; $("staffImportPreview").textContent = ""; $("createStaffImport").disabled = true; });
+function showStaffImport(entries, results = null) {
+  const host = $("staffImportPreview"); host.replaceChildren();
+  const good = entries.filter(e => e.ready).length;
+  host.append(element("p", "Rows: " + entries.length + " · Valid: " + good + " · Invalid: " + (entries.length - good)));
+  if (!results) {
+    const existingNames = new Set(roster.map(person => person.name.trim().toLowerCase()));
+    const matches = new Map();
+    for (const entry of entries) {
+      const key = entry.name.trim().toLowerCase();
+      if (existingNames.has(key) && !matches.has(key)) matches.set(key, entry.name.trim());
+    }
+    if (matches.size) host.append(element("p", "Names already in the roster: " + [...matches.values()].join(", ") + ". Creating these rows will add new staff identities with new Staff IDs; existing records will not be updated.", "notice"));
+  }
+  for (const item of results || entries) host.append(element("p", item.name + " — " + item.role + " — " + (results ? (item.ok ? item.code + " — Created" : "Failed: " + item.error) : (item.ready ? "Ready" : item.errors.join("; ")))));
+}
+$("staffImportForm").addEventListener("submit", async event => { event.preventDefault(); const file = $("staffCsv").files[0]; if (!file) { message("Choose a CSV file first.", true); return; } try { staffImport = parseStaffCsv(await file.text()); staffImportDone = false; showStaffImport(staffImport.entries); $("createStaffImport").disabled = !staffImport.valid.length || staffImport.invalid.length > 0; } catch (error) { staffImport = null; $("staffImportPreview").textContent = error.message; $("createStaffImport").disabled = true; } });
+$("createStaffImport").addEventListener("click", () => perform(async () => { if (!staffImport || staffImportDone || staffImport.invalid.length) throw new Error("Preview a valid CSV before creating staff."); $("createStaffImport").disabled = true; message("Creating staff..."); const results = await createImportedStaff(staffImport.valid, registerStaff); staffImportDone = true; showStaffImport(staffImport.entries, results); const failed = results.filter(r => !r.ok).length; return failed ? "Created: " + (results.length - failed) + " · Failed: " + failed : results.length + " staff members created successfully."; }));
+function previewWindows() {
+  bulkLabels = []; $("windowCreateStatus").textContent = "";
+  const host = $("bulkPreview"); host.replaceChildren();
+  try {
+    if (!$("bulkMode").value || !$("bulkQuantity").value) return;
+    bulkLabels = generateWindowLabels($("bulkMode").value, Number($("bulkQuantity").value), windows);
+    const conflicts = labelConflicts(bulkLabels, windows);
+    if (conflicts.length) throw new Error("Already exists: " + conflicts.map(displayWindowLabel).join(", "));
+    const list = element("ul");
+    for (const label of bulkLabels) list.append(element("li", displayWindowLabel(label)));
+    host.append(element("p", "Preview:"), list);
+  } catch (error) { bulkLabels = []; host.append(element("p", error.message, "error")); }
+  finally { render(); }
+}
+$("addWindows").addEventListener("click", () => {
+  $("bulkWindowForm").reset(); bulkLabels = [];
+  $("bulkPreview").replaceChildren(); $("windowCreateStatus").textContent = "";
+  render(); $("addWindowsModal").showModal();
+});
+$("cancelWindows").addEventListener("click", () => { if (!busy) $("addWindowsModal").close(); });
+$("addWindowsModal").addEventListener("cancel", event => { if (busy) event.preventDefault(); });
+for (const id of ["bulkMode", "bulkQuantity"]) $(id).addEventListener("input", previewWindows);
+$("bulkWindowForm").addEventListener("submit", event => {
   event.preventDefault();
-  const name = $("windowName").value;
-  perform(async () => { await saveWindow(null, name, true); $("windowForm").reset(); }, "Window added. Staff can now choose it on Start Shift.");
+  if (busy || !operational() || !bulkLabels.length || !$("bulkWindowForm").checkValidity()) return;
+  const labels = [...bulkLabels];
+  perform(async () => {
+    const conflicts = labelConflicts(labels, windows);
+    if (conflicts.length) throw new Error("Cannot create. Already exists: " + conflicts.map(displayWindowLabel).join(", "));
+    const results = await bulkCreateWindows(labels);
+    const failed = results.filter(r => !r.ok);
+    if (failed.length) {
+      bulkLabels = []; // Require another preview after any partial creation.
+      throw new Error("Created: " + results.filter(r => r.ok).map(r => displayWindowLabel(r.name)).join(", ") + ". Failed: " + failed.map(r => displayWindowLabel(r.name)).join(", "));
+    }
+    bulkLabels = []; $("addWindowsModal").close();
+    return labels;
+  }, labels => "Created: " + labels.map(displayWindowLabel).join(", ") + ".");
 });
 render();
 try {
   await initializeTurnCue();
   watchStaff(value => { roster = value; ready.staff = true; render(); }, listenError("staff"));
   watchWindows(value => { windows = value; ready.windows = true; render(); }, listenError("windows"));
+  watchServiceSamples(value => { serviceSamples = value; render(); }, error => message("Unable to load ETA history. " + error.message, true));
   watchQueue(queue => {
     ready.queue = Boolean(queue?.currentSessionId);
     $("sessionStatus").textContent = ready.queue ? "Queue session ready" : "No operational session";

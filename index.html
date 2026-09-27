@@ -267,6 +267,9 @@
             You're first in line.
           </div>
 
+          <div id="etaStatus" class="walk-away" aria-live="polite"></div>
+          <div id="getReady" class="called-text" hidden><strong>You’re getting close!</strong><br>Please start making your way back.</div>
+
           <div class="walk-away">
             Your place is saved on this device.<br>
             You can close this page and come back anytime.
@@ -399,7 +402,9 @@
 
 
   <script type="module">
+import { displayWindowLabel } from "./window-label.js";
     import { joinEntry } from "./join-entry.js";
+    import { estimateWait, etaCopy, createEtaTicker } from "./eta.js";
 
     import { initializeApp }
       from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
@@ -412,6 +417,7 @@
       query,
       where,
       orderBy,
+      limit,
       onSnapshot,
       serverTimestamp,
 
@@ -548,6 +554,10 @@
 
     let unsubscribeQueue = null;
     let unsubscribeEntry = null;
+    let unsubscribeWindows = null;
+    let unsubscribeSamples = null;
+    let waitingEntries = [], etaWindows = [], serviceSamples = [], entryData = null;
+    let etaTimer = null, firstEtaWriteAttempted = false;
 
 
     function showOnly(screen) {
@@ -888,6 +898,8 @@
       if (unsubscribeEntry) {
         unsubscribeEntry();
       }
+      if (unsubscribeWindows) unsubscribeWindows();
+      if (unsubscribeSamples) unsubscribeSamples();
 
 
       const entriesRef =
@@ -932,6 +944,7 @@
             if (myIndex === -1) {
               return;
             }
+            waitingEntries = snapshot.docs.map(customer => ({ id: customer.id, ...customer.data() }));
 
 
             const myPosition =
@@ -960,6 +973,7 @@
                 (myPosition - 1) +
                 " people ahead of you.";
             }
+            renderEta();
           },
 
           (error) => {
@@ -996,6 +1010,7 @@
 
             const data =
               snapshot.data();
+            entryData = data;
 
 
             if (data.ticketLabel) {
@@ -1009,6 +1024,7 @@
 
 
             handleStatus(data);
+            renderEta();
           },
 
           (error) => {
@@ -1019,6 +1035,14 @@
             );
           }
         );
+      unsubscribeWindows = onSnapshot(query(collection(db, "windows"), where("queueId", "==", QUEUE_ID)), snapshot => {
+        etaWindows = snapshot.docs.map(window => ({ id: window.id, ...window.data() }));
+        renderEta();
+      });
+      unsubscribeSamples = onSnapshot(query(collection(db, "queues", QUEUE_ID, "serviceSamples"), orderBy("recordedAt", "desc"), limit(40)), snapshot => {
+        serviceSamples = snapshot.docs.map(sample => sample.data()).reverse();
+        renderEta();
+      });
     }
 
 
@@ -1027,6 +1051,8 @@
       if (
         data.status === "waiting"
       ) {
+
+        startEtaTimer();
 
         showOnly(queueScreen);
 
@@ -1044,9 +1070,11 @@
         data.status === "called"
       ) {
 
+        clearEtaTimer();
+
         document.getElementById("calledDestination").textContent =
           data.calledWindowLabel
-            ? "Please return to " + data.calledWindowLabel + "."
+            ? "Please proceed to " + displayWindowLabel(data.calledWindowLabel) + "."
             : "Please return now.";
 
         showOnly(queueScreen);
@@ -1064,6 +1092,8 @@
       if (
         data.status === "completed"
       ) {
+
+        clearEtaTimer();
 
         clearSavedEntry();
 
@@ -1083,6 +1113,8 @@
         data.status === "cancelled"
       ) {
 
+        clearEtaTimer();
+
         clearSavedEntry();
 
         showOnly(
@@ -1091,6 +1123,31 @@
 
         stopListeners();
       }
+    }
+
+    function renderEta() {
+      if (!entryData || entryData.status !== "waiting") return;
+      const estimate = estimateWait({ samples: serviceSamples, windows: etaWindows, waitingEntries, entryId: myEntryId });
+      const copy = etaCopy(estimate);
+      document.getElementById("etaStatus").innerHTML = "<strong>" + copy.title + "</strong><br>" + copy.detail;
+      const cueKey = currentSessionId + ":" + myEntryId;
+      if (copy.numeric && estimate.minutes <= 5 && localStorage.getItem("turncue_get_ready") !== cueKey) {
+        localStorage.setItem("turncue_get_ready", cueKey);
+        document.getElementById("getReady").hidden = false;
+      } else if (localStorage.getItem("turncue_get_ready") === cueKey) document.getElementById("getReady").hidden = false;
+      if (copy.numeric && !entryData.firstNumericEtaShownAt && !firstEtaWriteAttempted) {
+        firstEtaWriteAttempted = true;
+        updateDoc(doc(db, "sessions", currentSessionId, "entries", myEntryId), { firstNumericEtaShownAt: serverTimestamp(), firstEtaLowerMinutes: copy.lower, firstEtaUpperMinutes: copy.upper, firstEtaMode: copy.mode }).catch(() => {
+          // Another same-device tab may have recorded the immutable first ETA.
+        });
+      }
+    }
+
+    function startEtaTimer() {
+      if (!etaTimer && entryData?.status === "waiting") etaTimer = createEtaTicker(renderEta);
+    }
+    function clearEtaTimer() {
+      if (etaTimer) { etaTimer(); etaTimer = null; }
     }
 
 
@@ -1307,6 +1364,9 @@
         unsubscribeEntry =
           null;
       }
+      if (unsubscribeWindows) { unsubscribeWindows(); unsubscribeWindows = null; }
+      if (unsubscribeSamples) { unsubscribeSamples(); unsubscribeSamples = null; }
+      clearEtaTimer();
     }
 
 
@@ -1321,6 +1381,7 @@
 
       myEntryId =
         null;
+      firstEtaWriteAttempted = false;
 
       joinButton.disabled =
         false;

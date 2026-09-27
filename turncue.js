@@ -2,8 +2,10 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
 import {
   getFirestore, doc, collection, getDoc, getDocFromServer, getDocsFromServer, query, where,
-  orderBy, limit, onSnapshot, runTransaction, serverTimestamp
+  orderBy, limit, startAfter, onSnapshot, runTransaction, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
+import { isInactivityDue, pendingCheckDecision } from "./inactivity.js";
+import { normalizeWindowLabel } from "./bulk-setup.js";
 
 const firebaseConfig = {
   apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
@@ -21,6 +23,8 @@ const scope = { businessId: BUSINESS_ID, locationId: LOCATION_ID, queueId: QUEUE
 const ref = (name, id) => doc(db, name, id);
 const newRef = name => doc(collection(db, name));
 const entryRef = (sessionId, entryId) => doc(db, "sessions", sessionId, "entries", entryId);
+const sampleRef = entryId => doc(db, "queues", QUEUE_ID, "serviceSamples", entryId);
+const clearInactivity = { inactivityCheckState: null, inactivityCheckId: null, inactivityCheckStartedAt: null, inactivityCheckDeadline: null };
 
 function fail(message, code = "operation-blocked") {
   const error = new Error(message);
@@ -106,33 +110,65 @@ export async function setStaffActive(staffId, active) {
   });
 }
 
+async function rejectExistingWindowLabel(name) {
+  // Legacy immutable windows may predate reservations. Check server data, including
+  // disabled windows, in bounded pages. Concurrent new creates share a reservation.
+  const key = normalizeWindowLabel(name);
+  let cursor = null;
+  for (;;) {
+    const constraints = [where("queueId", "==", QUEUE_ID), limit(100)];
+    if (cursor) constraints.push(startAfter(cursor));
+    const page = await getDocsFromServer(query(collection(db, "windows"), ...constraints));
+    if (page.docs.some(snapshot => inScope(snapshot.data()) && normalizeWindowLabel(snapshot.data().name) === key)) fail("Already exists: " + name);
+    if (page.size < 100) return;
+    cursor = page.docs[page.docs.length - 1];
+  }
+}
+
 export async function saveWindow(windowId, name, active) {
   name = cleanName(name);
+  if (!windowId) await rejectExistingWindowLabel(name);
   const windowRef = windowId ? ref("windows", windowId) : newRef("windows");
+  const labelRef = ref("windowLabels", normalizeWindowLabel(name));
   const configurationEventRef = newRef("windowEvents");
   return runTransaction(db, async tx => {
     const snapshot = await tx.get(windowRef);
     if (snapshot.exists()) {
       const window = snapshot.data();
       if (!inScope(window)) fail("Window belongs to another queue.");
-      if (window.currentShiftId) fail("End the shift before renaming or disabling this window.");
+      if (window.retired === true) fail("This window is retired and cannot be changed.");
+      if (window.currentEntryId || window.currentSessionId) fail("Complete the assigned customer before changing this window.");
+      if (window.currentShiftId || window.currentStaffId || ["active", "paused"].includes(window.state)) fail("End the shift before changing this window.");
+      if (name !== window.name) fail("Window labels are permanent for beta and cannot be renamed.");
       if (window.active === active) {
-        // A rename is not an operational state transition.
-        tx.update(windowRef, { name, updatedAt: serverTimestamp() });
+        tx.update(windowRef, { updatedAt: serverTimestamp() });
       } else {
         const state = active ? "available" : "inactive";
         tx.update(windowRef, {
-          name, active, state, stateChangedAt: serverTimestamp(), updatedAt: serverTimestamp(),
+          active, state, stateChangedAt: serverTimestamp(), updatedAt: serverTimestamp(),
           lastEventId: configurationEventRef.id
         });
         recordEvent(tx, configurationEventRef, windowRef.id, null, null,
           active ? "window_enabled" : "window_disabled", window.state, state, "manager");
       }
     } else {
+      if (windowId) fail("Window no longer exists.");
+      if ((await tx.get(labelRef)).exists()) fail("Already exists: " + name);
       tx.set(windowRef, { ...scope, name, active, state: active ? "available" : "inactive", currentStaffId: null, currentShiftId: null, currentEntryId: null, currentSessionId: null, currentTicketLabel: null, lastEventId: null, lastActionAt: null, stateChangedAt: serverTimestamp(), createdAt: serverTimestamp(), updatedAt: serverTimestamp() });
+      tx.set(labelRef, { ...scope, windowId: windowRef.id, createdAt: serverTimestamp() });
     }
     return windowRef.id;
   });
+}
+
+export async function bulkCreateWindows(labels) {
+  const results = [];
+  for (const label of labels) {
+    const name = cleanName(label);
+    try { await saveWindow(null, name, true); results.push({ name, ok: true }); }
+    catch (error) { results.push({ name, ok: false, error: error.message }); }
+  }
+  return results;
 }
 
 function recordEvent(tx, eventRef, windowId, staffId, shiftId, type, fromState, toState, source, details = {}) {
@@ -149,10 +185,10 @@ export async function startShift(staffId, windowId) {
     const window = data(await tx.get(windowRef), "Window no longer exists.");
     if (!person.active || person.businessId !== BUSINESS_ID) fail("Staff record is inactive or unavailable.");
     if (person.currentShiftId || person.currentWindowId) fail("You already have a shift. Your current window will appear shortly.");
-    if (!inScope(window) || !window.active || window.state !== "available" || window.currentShiftId || window.currentStaffId || window.currentEntryId) fail("This window is no longer available. Please choose another window.");
+    if (window.retired === true || !inScope(window) || !window.active || window.state !== "available" || window.currentShiftId || window.currentStaffId || window.currentEntryId) fail("This window is no longer available. Please choose another window.");
     tx.set(shiftRef, { ...scope, staffId, windowId, state: "active", startedAt: serverTimestamp(), endedAt: null, currentEntryId: null, currentSessionId: null, lastActionAt: serverTimestamp() });
     tx.update(staffRef, { currentShiftId: shiftRef.id, currentWindowId: windowId, updatedAt: serverTimestamp() });
-    tx.update(windowRef, { state: "active", currentStaffId: staffId, currentShiftId: shiftRef.id, lastActionAt: serverTimestamp(), stateChangedAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id });
+    tx.update(windowRef, { state: "active", currentStaffId: staffId, currentShiftId: shiftRef.id, lastActionAt: serverTimestamp(), stateChangedAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id, ...clearInactivity, pauseSource: null, reviewFlagType: null, reviewFlagAt: null });
     recordEvent(tx, eventRef, windowId, staffId, shiftRef.id, "shift_started", window.state, "active", "staff");
     return shiftRef.id;
   });
@@ -161,7 +197,7 @@ export async function startShift(staffId, windowId) {
 async function readAssignment(tx, windowId, expectedShiftId) {
   const windowRef = ref("windows", windowId);
   const window = data(await tx.get(windowRef), "Window not found.");
-  if (!inScope(window) || !window.active || !expectedShiftId || window.currentShiftId !== expectedShiftId || !window.currentStaffId) fail("This assignment has changed. Check the current window and try again.");
+  if (window.retired === true || !inScope(window) || !window.active || !expectedShiftId || window.currentShiftId !== expectedShiftId || !window.currentStaffId) fail("This assignment has changed. Check the current window and try again.");
   const staffRef = ref("staff", window.currentStaffId), shiftRef = ref("shifts", expectedShiftId);
   const person = data(await tx.get(staffRef), "Staff record not found.");
   const shift = data(await tx.get(shiftRef), "Shift not found.");
@@ -179,7 +215,8 @@ export async function changeWindowState(windowId, expectedShiftId, action, sourc
     if (action === "pause" && window.state !== "active") fail("Window is already paused.");
     if (action === "resume" && window.state !== "paused") fail("Window is already active.");
     const state = action === "end" ? "available" : action === "pause" ? "paused" : "active";
-    const windowChange = { state, stateChangedAt: serverTimestamp(), lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id };
+    const windowChange = { state, stateChangedAt: serverTimestamp(), lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id, ...clearInactivity,
+      pauseSource: action === "pause" ? "manual" : null, ...(action === "resume" ? { reviewFlagType: null, reviewFlagAt: null } : {}) };
     const shiftChange = { state: action === "end" ? "ended" : state, lastActionAt: serverTimestamp() };
     if (action === "end") {
       Object.assign(windowChange, { currentShiftId: null, currentStaffId: null });
@@ -188,6 +225,9 @@ export async function changeWindowState(windowId, expectedShiftId, action, sourc
     }
     tx.update(a.windowRef, windowChange);
     tx.update(a.shiftRef, shiftChange);
+    if (action === "pause" && window.currentEntryId) {
+      tx.update(entryRef(window.currentSessionId, window.currentEntryId), { etaLearningEligible: false, etaExclusionReason: "paused_during_service" });
+    }
     recordEvent(tx, eventRef, windowId, window.currentStaffId, expectedShiftId, action === "end" ? "shift_ended" : action === "pause" ? "window_paused" : "window_resumed", window.state, state, source);
   });
 }
@@ -213,8 +253,8 @@ export async function callNext(windowId, expectedShiftId, sessionId, source = "s
         if (!inScope(session) || session.status !== "open" || queue.currentSessionId !== sessionId) fail("The operational session has changed. Wait for the dashboard to refresh.");
         if (customer.status !== "waiting") fail("Another window called this customer.", "candidate-lost");
         if (!inScope(customer) || customer.sessionId !== sessionId) fail("Customer belongs to another queue.");
-        tx.update(candidateRef, { status: "called", calledAt: serverTimestamp(), calledByStaffId: a.window.currentStaffId, calledByShiftId: expectedShiftId, calledWindowId: windowId, calledWindowLabel: a.window.name });
-        tx.update(a.windowRef, { currentEntryId: candidateRef.id, currentSessionId: sessionId, currentTicketLabel: customer.ticketLabel, lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id });
+        tx.update(candidateRef, { status: "called", calledAt: serverTimestamp(), calledByStaffId: a.window.currentStaffId, calledByShiftId: expectedShiftId, calledWindowId: windowId, calledWindowLabel: a.window.name, etaLearningEligible: true });
+        tx.update(a.windowRef, { currentEntryId: candidateRef.id, currentSessionId: sessionId, currentTicketLabel: customer.ticketLabel, currentEntryCalledAt: serverTimestamp(), lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id, ...clearInactivity });
         tx.update(a.shiftRef, { currentEntryId: candidateRef.id, currentSessionId: sessionId, lastActionAt: serverTimestamp() });
         recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "customer_called", "active", "active", source, { entryId: candidateRef.id, sessionId });
         return customer.ticketLabel;
@@ -247,10 +287,83 @@ export async function completeCustomer(sessionId, customerId, windowId = null, e
     }
     const a = await readAssignment(tx, windowId, expectedShiftId);
     if (customer.calledWindowId !== windowId || customer.calledByShiftId !== expectedShiftId || customer.calledByStaffId !== a.window.currentStaffId || a.window.currentEntryId !== customerId || a.window.currentSessionId !== sessionId) fail("This customer is not assigned to this shift.");
+    const cleanEligible = customer.etaLearningEligible === true && Boolean(customer.calledAt?.toMillis?.());
     tx.update(customerRef, { status: "completed", completedAt: serverTimestamp() });
-    tx.update(a.windowRef, { currentEntryId: null, currentSessionId: null, currentTicketLabel: null, lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id });
+    // Entry ID is deterministic: repeated completion cannot duplicate a sample.
+    tx.set(sampleRef(customerId), { ...scope, sessionId, entryId: customerId, windowId, shiftId: expectedShiftId,
+      // Both timestamps are server-authoritative. eta.js derives duration only
+      // after Firestore resolves them, never from a staff device clock.
+      calledAt: customer.calledAt || null, completedAt: serverTimestamp(), durationSeconds: null, durationMinutes: null,
+      cleanEligible, exclusionReason: cleanEligible ? null : (customer.etaExclusionReason || "invalid_or_legacy_service"), recordedAt: serverTimestamp() });
+    tx.update(a.windowRef, { currentEntryId: null, currentSessionId: null, currentTicketLabel: null, currentEntryCalledAt: null, lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id, ...clearInactivity });
     tx.update(a.shiftRef, { currentEntryId: null, currentSessionId: null, lastActionAt: serverTimestamp() });
     recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "customer_completed", a.window.state, a.window.state, source, { entryId: customerId, sessionId });
+  });
+}
+
+async function firstWaitingCandidate(sessionId) {
+  const candidates = await getDocsFromServer(query(collection(db, "sessions", sessionId, "entries"), where("status", "==", "waiting"), orderBy("joinedAt", "asc"), limit(1)));
+  return candidates.empty ? null : candidates.docs[0].ref;
+}
+
+// Called by the future best-effort evaluator after it has calculated learnPace.
+export async function startInactivityCheck(windowId, expectedShiftId, sessionId, learned, now = Date.now()) {
+  const candidateRef = await firstWaitingCandidate(sessionId);
+  if (!candidateRef) return null;
+  const eventRef = newRef("windowEvents"), checkId = eventRef.id;
+  return runTransaction(db, async tx => {
+    const a = await readAssignment(tx, windowId, expectedShiftId);
+    const candidate = data(await tx.get(candidateRef), "Waiting customer changed.");
+    if (candidate.status !== "waiting" || !isInactivityDue(a.window, true, learned, now)) return null;
+    tx.update(a.windowRef, { inactivityCheckState: "pending", inactivityCheckId: checkId,
+      inactivityCheckStartedAt: serverTimestamp(), inactivityCheckDeadline: Timestamp.fromMillis(now + 120000), lastEventId: eventRef.id, updatedAt: serverTimestamp() });
+    recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "inactivity_check_started", "active", "active", "inactivity_check", { checkId });
+    return checkId;
+  });
+}
+
+export async function confirmInactivityCheck(windowId, expectedShiftId, checkId) {
+  const eventRef = newRef("windowEvents");
+  return runTransaction(db, async tx => {
+    const a = await readAssignment(tx, windowId, expectedShiftId);
+    if (a.window.inactivityCheckState !== "pending" || a.window.inactivityCheckId !== checkId || a.window.currentEntryId) fail("This inactivity check is no longer pending.");
+    tx.update(a.windowRef, { ...clearInactivity, lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id });
+    tx.update(a.shiftRef, { lastActionAt: serverTimestamp() });
+    recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "inactivity_check_confirmed", "active", "active", "inactivity_check", { checkId });
+  });
+}
+
+export async function resolveExpiredInactivityCheck(windowId, expectedShiftId, sessionId, checkId, now = Date.now()) {
+  const candidateRef = await firstWaitingCandidate(sessionId);
+  const eventRef = newRef("windowEvents");
+  return runTransaction(db, async tx => {
+    const a = await readAssignment(tx, windowId, expectedShiftId);
+    const hasWaiting = candidateRef ? (await tx.get(candidateRef)).data()?.status === "waiting" : false;
+    if (a.window.inactivityCheckId !== checkId || pendingCheckDecision(a.window, hasWaiting, now) === "none") return null;
+    if (pendingCheckDecision(a.window, hasWaiting, now) === "cancel") {
+      tx.update(a.windowRef, { ...clearInactivity, lastEventId: eventRef.id, updatedAt: serverTimestamp() });
+      recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "inactivity_check_cancelled", "active", "active", "inactivity_check", { checkId, reason: "queue_empty" });
+      return "cancelled";
+    }
+    tx.update(a.windowRef, { state: "paused", stateChangedAt: serverTimestamp(), lastActionAt: serverTimestamp(), updatedAt: serverTimestamp(), lastEventId: eventRef.id,
+      ...clearInactivity, pauseSource: "inactivity_check", reviewFlagType: "inactivity_check", reviewFlagAt: serverTimestamp() });
+    tx.update(a.shiftRef, { state: "paused", lastActionAt: serverTimestamp() });
+    recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "window_auto_paused", "active", "paused", "inactivity_check", { checkId });
+    return "auto_paused";
+  });
+}
+
+// Queue-empty cancellation is separate from expiry so pages can remove an
+// unnecessary prompt immediately. The transaction makes concurrent tabs single-winner.
+export async function cancelInactivityCheckIfQueueEmpty(windowId, expectedShiftId, sessionId, checkId) {
+  if (await firstWaitingCandidate(sessionId)) return null;
+  const eventRef = newRef("windowEvents");
+  return runTransaction(db, async tx => {
+    const a = await readAssignment(tx, windowId, expectedShiftId);
+    if (a.window.inactivityCheckState !== "pending" || a.window.inactivityCheckId !== checkId || a.window.currentEntryId) return null;
+    tx.update(a.windowRef, { ...clearInactivity, lastEventId: eventRef.id, updatedAt: serverTimestamp() });
+    recordEvent(tx, eventRef, windowId, a.window.currentStaffId, expectedShiftId, "inactivity_check_cancelled", "active", "active", "inactivity_check", { checkId, reason: "queue_empty" });
+    return "cancelled";
   });
 }
 
@@ -269,6 +382,10 @@ export function watchQueue(next, error) {
 }
 export function watchEntries(sessionId, status, next, error) {
   return onSnapshot(query(collection(db, "sessions", sessionId, "entries"), where("status", "==", status), orderBy(status === "waiting" ? "joinedAt" : "calledAt", "asc")), snapshot => next(snapshot.docs.map(s => ({ id: s.id, ...s.data() }))), error);
+}
+// Bound learning reads to the newest 40 samples.
+export function watchServiceSamples(next, error) {
+  return onSnapshot(query(collection(db, "queues", QUEUE_ID, "serviceSamples"), orderBy("recordedAt", "desc"), limit(40)), snapshot => next(snapshot.docs.map(s => ({ id: s.id, ...s.data() })).reverse()), error);
 }
 
 export function element(tag, text, className) {

@@ -1,6 +1,16 @@
 # TurnCue
 
-Virtual queue pilot, Batch 2: Staff + Windows. GitHub Pages serves these files directly; no build step.
+Virtual queue pilot, Batch 3: ETA learning, inactivity checks, staff import, and window operations. GitHub Pages serves these files directly; no build step.
+
+## Batch 3A ETA learning
+
+TurnCue stores one deterministic service sample per Batch 2 customer at `queues/{queueId}/serviceSamples/{entryId}`. A call starts as eligible; pausing while that customer remains assigned marks it ineligible. The app fetches the newest 40 samples, then filters for eligibility. With fewer than 3 it calibrates; at 3 it uses the median. Later, each sample is winsorized to three median absolute deviations (at least ±2 minutes) around the raw median, then a weighted median gives newer samples weights 1..N. This preserves truthful outliers while damping their customer-facing effect.
+
+ETA becomes Stable only with at least 5 samples and a recent-five MAD no greater than 25% of their median (minimum 1 minute); otherwise it remains an Early rounded 5-minute range. For each active staffed window, ETA starts from its current customer's estimated remaining time, or a conservative 25%-of-pace cushion (2–5 minutes) if overdue. Waiting customers are then assigned in order to the next available window. Paused and unstaffed windows contribute no capacity. Batch 3A is client-side learning only; its ETA is not a guarantee, and history/prediction writes remain subject to the trusted-pilot security model.
+
+## Batch 3B-1 inactivity core
+
+The core creates a persisted two-minute pending check only when an active, assigned, empty window has a waiting customer and has been idle for twice the learned service pace. Confirmation resets `lastActionAt`; an expired check auto-pauses only after re-verifying a current waiting entry, otherwise it is cancelled as `queue_empty`. This Spark-pilot safeguard is best-effort: a manager or staff page must remain open to initiate or resolve checks; both pages evaluate every 30 seconds. Persisted state survives refreshes, and transactions make each pending/confirmation/auto-pause transition single-winner; it is not a server-side watchdog.
 
 - Customer: https://kithlyu.github.io/TurnCue/
 - Manager: https://kithlyu.github.io/TurnCue/business.html
@@ -8,9 +18,11 @@ Virtual queue pilot, Batch 2: Staff + Windows. GitHub Pages serves these files d
 
 ## Architecture
 
+The manager’s ADD WINDOWS modal previews numbered or lettered windows as inputs change; custom-label creation is not offered in the beta UI. Quantity means additional windows (1–26 per request). Numbered and lettered series independently continue after the highest existing canonical label in this queue, including CLOSED and retired windows with canonical labels. Gaps are not filled: 1 and 5 lead to 6; A and D lead to E. Custom labels outside the numbered or single-letter patterns do not advance either series. Letters stop at Z; numbered labels must stay within JavaScript's safe integer range. Changing the series or quantity updates the preview automatically. Cancel closes without creating windows; successful creation updates the live window list without assigning staff.
+
 Business → Location → Queue → Operational Session → Entries stays unchanged. The manager page initializes the development foundation and a session if needed. Development IDs remain `demo-business`, `main-location`, and `main-queue`.
 
-Managers register staff and configure windows. Staff enter their generated ID, confirm their name, and explicitly choose an available window. A manager is a staff record with `role: manager` and can use the same staff page.
+Managers register staff individually or import a CSV with exactly `name,role` columns (`staff` or `manager`). The import previews valid/invalid rows and creates records from a valid preview with new permanent TurnCue Staff IDs; names are display data, not identity. Import never assigns windows or creates shifts. Managers configure windows. Staff enter their generated ID, confirm their name, and explicitly choose an available window. A manager is a staff record with `role: manager` and can use the same staff page.
 
 `turncue.js` shares Firestore operations between manager and staff pages; `turncue.css` shares their styling. The customer page retains the Batch 1 lifecycle, device recovery, tickets, and timing, with the called window added. Its ticket transaction is shared through join-entry.js: entry creation and the exact +1 counter update remain atomic. A bounded retry reuses the same entry ID only when a permission failure is accompanied by a server-confirmed counter advance; other permission errors surface.
 
@@ -18,10 +30,10 @@ Managers register staff and configure windows. Staff enter their generated ID, c
 - `staffCodes/{TC-XXXXXXXX}`: immutable visible-ID lookup with `staffId`, `businessId`, `createdAt`. IDs are reserved transactionally and never reused.
 - `windows/{id}`: permanent resource with business/location/queue IDs, `name`, configured `active`, live `state` (`available`, `active`, `paused`, `inactive`), current staff/shift/entry/session/ticket pointers, `lastActionAt`, `stateChangedAt`, `lastEventId`, and creation/update timestamps.
 - `shifts/{id}`: staff/window/scope IDs, `state` (`active`, `paused`, `ended`), exact `startedAt`/`endedAt`, current entry/session, `lastActionAt`. Ending clears live pointers, never removes history.
-- `windowEvents/{id}`: append-only events with scope, staff/window/shift IDs, `type`, `fromState`, `toState`, `source` (`staff` or `manager`), `occurredAt`; customer events include session/entry IDs. `shift_started` also records the window becoming active; `shift_ended` records it becoming available. Pause/resume and call/completion are separate events.
+- `windowEvents/{id}`: append-only events with scope, staff/window/shift IDs, `type`, `fromState`, `toState`, `source` (`staff`, `manager`, or `inactivity_check`), `occurredAt`; customer events include session/entry IDs. `shift_started` also records the window becoming active; `shift_ended` records it becoming available. Pause/resume and call/completion are separate events.
 - `sessions/{sessionId}/entries/{entryId}`: Batch 1 fields retained. Calls add `calledByStaffId`, `calledByShiftId`, `calledWindowId`, `calledWindowLabel`. No new serving state.
 
-Start Shift updates staff, window, shift, and history atomically. One staff record can point to one shift, and one window can have one owner. Pause retains ownership and any called customer. End Shift requires no unresolved called customer. Rename/disable and staff deactivation require ending the shift first.
+Start Shift updates staff, window, shift, and history atomically. One staff record can point to one shift, and one window can have one owner. Pause retains ownership and any called customer. End Shift requires no unresolved called customer. Window labels are immutable after creation for beta. Closing a window and staff deactivation require ending the shift first.
 
 Call Next fetches the earliest waiting entry from the server, then transactionally rechecks that entry, the window, owner, shift, and current session. The transaction assigns the entry and updates the window/shift together. A losing caller fetches another candidate and retries (up to 12 fresh candidates, in addition to the SDK's transaction retries). Exhausted contention reports failure, never success. Completion clears both current-entry pointers atomically. A stale tab cannot act on a replacement shift. Existing Batch 1 called entries without a window can still be completed by the manager.
 
@@ -46,11 +58,19 @@ Use a manager browser, two separate staff devices/browser profiles, and three cu
 2. Both staff enter their own ID and confirm their name. Both choose Window 1 and start at nearly the same time. Exactly one must own it. The other must see an availability error and explicitly choose Window 2. Verify one staff cannot claim a second window from another tab.
 3. Join three customers. Verify sequential unique tickets, live positions, and waiting states. Close/reopen one customer page using the same browser/profile: the same ticket returns without another entry.
 4. Press Call Next on both staff devices together. They must receive different waiting customers, with the two earliest tickets called. Each customer sees the correct window. Calling again while occupied must be blocked.
-5. Pause an occupied window. Ownership and its called customer stay in place; Call Next and End Shift remain blocked. Complete that customer while paused. Verify the customer completion screen and wait/service/total time, and that the window stays paused until Resume.
+5. Pause an occupied window. Ownership and its called customer stay in place; Call Next and End Shift remain blocked. Complete that customer while paused. Verify the customer completion screen and wait/service/total time, and that the window stays PAUSED until Resume returns it to OPEN.
 6. Have the third waiting customer leave and confirm cancellation and the manager's live waiting list. Complete the other called customer from the manager dashboard. The owning staff screen should release that customer immediately.
-7. Use manager Pause/Resume on an assigned window and verify the staff screen follows. End a resolved shift. Confirm the window becomes available. Start another staff member there after a short gap; verify the old shift's `endedAt` and new shift's `startedAt` preserve the gap.
-8. Mark an unassigned staff member inactive and confirm their ID cannot enter; reactivate and reuse the same permanent record. Rename/disable/re-enable an unassigned window. Confirm active shifts block deactivation/configuration changes.
+7. Use manager Pause/Resume on an assigned window and verify the staff screen follows. End a resolved shift. Confirm the window becomes OPEN and available for a new shift. Start another staff member there after a short gap; verify the old shift's `endedAt` and new shift's `startedAt` preserve the gap.
+8. Mark an unassigned staff member inactive and confirm their ID cannot enter; reactivate and reuse the same permanent record. CLOSE/OPEN an unassigned window and confirm its label stays unchanged. Confirm no rename action is offered; window labels are permanent for beta. Confirm active shifts block deactivation/configuration changes.
 9. Inspect `shifts` and `windowEvents` in Firebase: start/end, pause/resume, and call/completion timestamps remain; previous sessions, entries, and `/queue` data still exist. No duplicate customer assignment or overlapping ownership should have occurred.
 
-Production network behavior and the deployed indexes still need this manual pilot test, even after local validation.
+Production network behavior and deployed indexes require this manual pilot test in addition to local validation. The coordinated Batch 3 smoke test is complete and green.
 
+
+## Window Operations UX
+
+Normal manager window labels are OPEN (`active: true`, stored `available` or `active`), PAUSED (`active: true`, stored `paused`), and CLOSED (`active: false`, stored `inactive`). Retired windows remain hidden and excluded from normal manager/staff operations, shift selection, inactivity evaluation, and ETA capacity; their records and history are preserved. Closing/reopening reuses `window_disabled`/`window_enabled` history and the existing transaction; no new fields or migration are needed. Closed windows stay configured, but cannot start shifts or contribute capacity. Closing requires no staff, shift, customer or session pointers and an available state; pause retains assignment. Existing trusted-pilot and client-side inactivity limitations still apply.
+
+## Batch 3 release checkpoint
+
+Automated regression and the coordinated manager/staff/customer manual smoke test were reported green before release-prep. For the maintained, local-only release checkpoint and legacy test caveats, see [tests/README.md](tests/README.md). No deployment is implied by this checkpoint.

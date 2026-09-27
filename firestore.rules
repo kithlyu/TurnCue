@@ -85,13 +85,29 @@ service cloud.firestore {
           && request.resource.data.cancelledAt == null;
         allow update: if
           (resource.data.status == 'waiting' && request.resource.data.status == 'called'
-            && changedOnly(['status','calledAt','calledByStaffId','calledByShiftId','calledWindowId','calledWindowLabel'])
+            && changedOnly(['status','calledAt','calledByStaffId','calledByShiftId','calledWindowId','calledWindowLabel','etaLearningEligible'])
             && request.resource.data.calledAt == request.time
             && text(request.resource.data.calledByStaffId) && text(request.resource.data.calledByShiftId)
-            && text(request.resource.data.calledWindowId) && text(request.resource.data.calledWindowLabel))
+            && text(request.resource.data.calledWindowId) && text(request.resource.data.calledWindowLabel)
+            && (!request.resource.data.keys().hasAny(['etaLearningEligible'])
+              || request.resource.data.etaLearningEligible == true))
           ||
           (resource.data.status == 'called' && request.resource.data.status == 'completed'
             && changedOnly(['status','completedAt']) && request.resource.data.completedAt == request.time)
+          ||
+          (resource.data.status == 'called' && request.resource.data.status == 'called'
+            && changedOnly(['etaLearningEligible','etaExclusionReason'])
+            && resource.data.etaLearningEligible == true && request.resource.data.etaLearningEligible == false
+            && request.resource.data.etaExclusionReason == 'paused_during_service')
+          ||
+          (resource.data.status == 'waiting' && request.resource.data.status == 'waiting'
+            && changedOnly(['firstNumericEtaShownAt','firstEtaLowerMinutes','firstEtaUpperMinutes','firstEtaMode'])
+            && !resource.data.keys().hasAny(['firstNumericEtaShownAt','firstEtaLowerMinutes','firstEtaUpperMinutes','firstEtaMode'])
+            && request.resource.data.firstNumericEtaShownAt == request.time
+            && request.resource.data.firstEtaLowerMinutes is int && request.resource.data.firstEtaUpperMinutes is int
+            && request.resource.data.firstEtaLowerMinutes >= 0 && request.resource.data.firstEtaUpperMinutes <= 240
+            && request.resource.data.firstEtaLowerMinutes <= request.resource.data.firstEtaUpperMinutes
+            && request.resource.data.firstEtaMode in ['early','stable'])
           ||
           (resource.data.status == 'waiting' && request.resource.data.status == 'cancelled'
             && changedOnly(['status','cancelledAt']) && request.resource.data.cancelledAt == request.time);
@@ -129,6 +145,54 @@ service cloud.firestore {
       allow delete: if false;
     }
     match /windows/{windowId} {
+      // Missing Batch 3 fields on legacy windows have the same meaning as null.
+      function checkCleared(d) {
+        return d.get('inactivityCheckState', null) == null
+          && d.get('inactivityCheckId', null) == null
+          && d.get('inactivityCheckStartedAt', null) == null
+          && d.get('inactivityCheckDeadline', null) == null;
+      }
+      function validMetadata(d) {
+        return (checkCleared(d) || (
+            d.get('inactivityCheckState', null) == 'pending'
+            && text(d.get('inactivityCheckId', null))
+            && d.get('inactivityCheckStartedAt', null) is timestamp
+            && d.get('inactivityCheckDeadline', null) is timestamp
+            && d.inactivityCheckDeadline > d.inactivityCheckStartedAt
+            && d.state == 'active' && emptyCustomer(d)))
+          && d.get('pauseSource', null) in [null, 'manual', 'inactivity_check']
+          && d.get('reviewFlagType', null) in [null, 'inactivity_check']
+          && (d.get('reviewFlagType', null) == null
+            ? d.get('reviewFlagAt', null) == null
+            : d.get('reviewFlagAt', null) is timestamp);
+      }
+      function sameCheck(a, b) {
+        return a.get('inactivityCheckState', null) == b.get('inactivityCheckState', null)
+          && a.get('inactivityCheckId', null) == b.get('inactivityCheckId', null)
+          && a.get('inactivityCheckStartedAt', null) == b.get('inactivityCheckStartedAt', null)
+          && a.get('inactivityCheckDeadline', null) == b.get('inactivityCheckDeadline', null);
+      }
+      function operationalMetadata() {
+        let a = resource.data;
+        let b = request.resource.data;
+        let autoPause = a.state == 'active' && b.state == 'paused'
+          && a.get('inactivityCheckState', null) == 'pending'
+          && a.get('inactivityCheckDeadline', null) is timestamp
+          && a.inactivityCheckDeadline <= request.time && emptyCustomer(a);
+        return validMetadata(b) && (sameCheck(a, b) || checkCleared(b))
+          && (a.get('pauseSource', null) == b.get('pauseSource', null)
+            || (b.get('pauseSource', null) == null && b.state in ['active', 'available'])
+            || (a.state == 'active' && b.state == 'paused'
+              && (b.get('pauseSource', null) == 'manual'
+                || (autoPause && b.get('pauseSource', null) == 'inactivity_check'))))
+          && ((a.get('reviewFlagType', null) == b.get('reviewFlagType', null)
+              && a.get('reviewFlagAt', null) == b.get('reviewFlagAt', null))
+            || (b.get('reviewFlagType', null) == null && b.state == 'active'
+              && a.state in ['available', 'paused'])
+            || (autoPause && b.get('pauseSource', null) == 'inactivity_check'
+              && b.get('reviewFlagType', null) == 'inactivity_check'
+              && b.get('reviewFlagAt', null) == request.time));
+      }
       function transition() {
         let a = resource.data;
         let b = request.resource.data;
@@ -159,11 +223,11 @@ service cloud.firestore {
         && request.resource.data.lastActionAt == null && request.resource.data.createdAt == request.time
         && request.resource.data.updatedAt == request.time && request.resource.data.stateChangedAt == request.time;
       allow update: if request.resource.data.updatedAt == request.time && (
-        (changedOnly(['name','updatedAt'])
+        (changedOnly(['updatedAt'])
           && unassigned(resource.data) && emptyCustomer(resource.data)
           && text(request.resource.data.name))
         ||
-        (changedOnly(['name','active','state','stateChangedAt','updatedAt','lastEventId'])
+        (changedOnly(['active','state','stateChangedAt','updatedAt','lastEventId'])
           && unassigned(resource.data) && emptyCustomer(resource.data)
           && text(request.resource.data.name) && request.resource.data.active is bool
           && request.resource.data.active != resource.data.active
@@ -175,16 +239,33 @@ service cloud.firestore {
           && request.resource.data.stateChangedAt == request.time)
         ||
         (changedOnly(['state','stateChangedAt','currentStaffId','currentShiftId','currentEntryId',
-            'currentSessionId','currentTicketLabel','lastActionAt','updatedAt','lastEventId'])
+            'currentSessionId','currentTicketLabel','currentEntryCalledAt','lastActionAt','updatedAt','lastEventId',
+            'inactivityCheckState','inactivityCheckId','inactivityCheckStartedAt','inactivityCheckDeadline','pauseSource','reviewFlagType','reviewFlagAt'])
           && resource.data.active == true && request.resource.data.lastActionAt == request.time
           && text(request.resource.data.lastEventId) && customerPointer(request.resource.data)
+          && operationalMetadata()
           && (emptyCustomer(request.resource.data) ? request.resource.data.currentTicketLabel == null : text(request.resource.data.currentTicketLabel))
           && (resource.data.state == request.resource.data.state
             ? request.resource.data.stateChangedAt == resource.data.stateChangedAt
             : request.resource.data.stateChangedAt == request.time)
           && transition())
+        ||
+        (changedOnly(['inactivityCheckState','inactivityCheckId','inactivityCheckStartedAt','inactivityCheckDeadline','lastEventId','updatedAt'])
+          && resource.data.active == true && resource.data.state == 'active' && request.resource.data.state == 'active'
+          && unassigned(resource.data) == false && emptyCustomer(resource.data)
+          && text(request.resource.data.lastEventId)
+          && validMetadata(request.resource.data)
+          && (checkCleared(request.resource.data)
+            || (checkCleared(resource.data)
+              && request.resource.data.inactivityCheckStartedAt == request.time)))
       );
       allow delete: if false;
+    }
+    match /windowLabels/{label} {
+      allow read: if true;
+      allow create: if shape(['businessId','locationId','queueId','windowId','createdAt'])
+        && scope(request.resource.data) && text(request.resource.data.windowId) && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
     }
     match /shifts/{shiftId} {
       allow read: if true;
@@ -212,7 +293,7 @@ service cloud.firestore {
     match /windowEvents/{eventId} {
       allow read: if true;
       allow create: if request.resource.data.keys().hasAll(['businessId','locationId','queueId','windowId','staffId','shiftId','type','fromState','toState','source','occurredAt'])
-        && request.resource.data.keys().hasOnly(['businessId','locationId','queueId','windowId','staffId','shiftId','type','fromState','toState','source','occurredAt','entryId','sessionId'])
+        && request.resource.data.keys().hasOnly(['businessId','locationId','queueId','windowId','staffId','shiftId','type','fromState','toState','source','occurredAt','entryId','sessionId','checkId','reason'])
         && scope(request.resource.data) && text(request.resource.data.windowId)
         && (
           (text(request.resource.data.staffId) && text(request.resource.data.shiftId)
@@ -220,6 +301,11 @@ service cloud.firestore {
             && request.resource.data.fromState in ['available','active','paused']
             && request.resource.data.toState in ['available','active','paused']
             && request.resource.data.source in ['staff','manager'])
+          ||
+          (text(request.resource.data.staffId) && text(request.resource.data.shiftId)
+            && request.resource.data.type in ['inactivity_check_started','inactivity_check_confirmed','inactivity_check_cancelled','window_auto_paused']
+            && text(request.resource.data.checkId) && request.resource.data.source == 'inactivity_check'
+            && request.resource.data.fromState in ['active'] && request.resource.data.toState in ['active','paused'])
           ||
           (request.resource.data.staffId == null && request.resource.data.shiftId == null
             && request.resource.data.type == 'window_disabled'
@@ -231,6 +317,19 @@ service cloud.firestore {
             && request.resource.data.fromState == 'inactive' && request.resource.data.toState == 'available'
             && request.resource.data.source == 'manager')
         ) && request.resource.data.occurredAt == request.time;
+      allow update, delete: if false;
+    }
+    match /queues/{queueId}/serviceSamples/{sampleId} {
+      allow read: if true;
+      allow create: if sampleId == request.resource.data.entryId
+        && request.resource.data.keys().hasAll(['businessId','locationId','queueId','sessionId','entryId','windowId','shiftId','calledAt','completedAt','durationSeconds','durationMinutes','cleanEligible','exclusionReason','recordedAt'])
+        && request.resource.data.keys().hasOnly(['businessId','locationId','queueId','sessionId','entryId','windowId','shiftId','calledAt','completedAt','durationSeconds','durationMinutes','cleanEligible','exclusionReason','recordedAt'])
+        && scope(request.resource.data) && request.resource.data.queueId == queueId
+        && text(request.resource.data.sessionId) && text(request.resource.data.entryId)
+        && text(request.resource.data.windowId) && text(request.resource.data.shiftId)
+        && request.resource.data.cleanEligible is bool && request.resource.data.recordedAt == request.time
+        && request.resource.data.completedAt == request.time
+        && request.resource.data.durationSeconds == null && request.resource.data.durationMinutes == null;
       allow update, delete: if false;
     }
     match /queue/{document} {

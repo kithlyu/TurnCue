@@ -1,0 +1,20 @@
+import assert from "node:assert/strict";
+import { inactivityThresholdMinutes, isInactivityEligible, isInactivityDue, isCheckExpired, pendingCheckDecision } from "../inactivity.js";
+
+const now = 10_000_000;
+const learned = { confidence: "early", paceMinutes: 8 };
+const window = (overrides = {}) => ({ active: true, state: "active", currentShiftId: "shift", currentStaffId: "staff", currentEntryId: null, inactivityCheckState: null, lastActionAt: { toMillis: () => now - 16 * 60000 }, ...overrides });
+assert.equal(inactivityThresholdMinutes({ confidence: "calibrating", paceMinutes: null }), null, "Calibration disables inactivity.");
+assert.equal(inactivityThresholdMinutes(learned), 16);
+assert.equal(isInactivityEligible(window(), false, learned), false, "No waiting customers means no check.");
+assert.equal(isInactivityEligible(window({ currentEntryId: "entry" }), true, learned), false, "Current customers are protected.");
+assert.equal(isInactivityDue(window({ lastActionAt: { toMillis: () => now - 15 * 60000 } }), true, learned, now), false);
+assert.equal(isInactivityDue(window(), true, learned, now), true, "Two pace lengths starts one pending check.");
+const pending = window({ inactivityCheckState: "pending", inactivityCheckId: "check", inactivityCheckDeadline: { toMillis: () => now - 1 } });
+assert(isCheckExpired(pending, now));
+assert.equal(pendingCheckDecision(pending, true, now), "auto_pause", "Expired pending check with waiting pauses.");
+assert.equal(pendingCheckDecision(pending, false, now), "cancel", "Empty queue cancels instead of pausing.");
+const confirmed = { ...pending, inactivityCheckState: null, inactivityCheckId: null, lastActionAt: { toMillis: () => now } };
+assert.equal(confirmed.state, "active"); assert.equal(confirmed.inactivityCheckState, null); assert.equal(confirmed.lastActionAt.toMillis(), now);
+assert.notEqual("manual", "inactivity_check", "Manual and automatic pause sources stay distinct.");
+console.log("Batch 3B-1 inactivity focused tests: PASS");

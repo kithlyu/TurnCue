@@ -5,6 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TurnCue Staff</title>
   <link rel="stylesheet" href="turncue.css">
+  <style>
+    #inactivityModal { width: min(440px, calc(100% - 32px)); margin: auto; padding: 28px; border: 0; border-radius: 20px; box-shadow: 0 16px 64px rgba(0,0,0,.3); }
+    #inactivityModal::backdrop { background: rgba(0,0,0,.65); }
+    #inactivityConfirm { width: 100%; }
+    #inactivityFeedback:empty { display: none; }
+  </style>
 </head>
 <body>
 <main class="staff">
@@ -33,15 +39,24 @@
     <p class="notice">Changing staff or closing this page does not end your shift. Use END SHIFT to make your window available.</p>
   </section>
 </main>
+<dialog id="inactivityModal" aria-labelledby="inactivityPrompt" aria-describedby="inactivityFeedback">
+  <h2 id="inactivityPrompt"></h2>
+  <p id="inactivityFeedback" role="status" aria-live="polite"></p>
+  <button id="inactivityConfirm" type="button" autofocus>YES, I’M HERE</button>
+</dialog>
 <script type="module">
-import { findStaff, startShift, changeWindowState, callNext, completeCustomer, watchPerson, watchWindows, watchQueue, element, actionButton } from "./turncue.js";
+import { displayWindowLabel } from "./window-label.js";
+import { findStaff, startShift, changeWindowState, callNext, completeCustomer, watchPerson, watchWindows, watchQueue, watchEntries, watchServiceSamples, startInactivityCheck, resolveExpiredInactivityCheck, cancelInactivityCheckIfQueueEmpty, confirmInactivityCheck, element, actionButton } from "./turncue.js";
+import { learnPace } from "./eta.js";
 const $ = id => document.getElementById(id);
-let candidate = null, person = null, windows = [], sessionId = null;
+let candidate = null, person = null, windows = [], sessionId = null, waiting = [], serviceSamples = [], inactivityTimer = null, evaluating = false, stopWaiting = null;
 let busy = false, choosing = false, selectedWindowId = "", stopPerson = null;
 let windowsReady = false, personReady = false, queueReady = false;
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
+  $("inactivityFeedback").textContent = text;
+  $("inactivityFeedback").classList.toggle("error", error);
 }
 async function perform(work, success) {
   if (busy) return;
@@ -53,9 +68,31 @@ async function perform(work, success) {
 function clearPerson() {
   if (stopPerson) stopPerson();
   stopPerson = null; person = null; candidate = null; personReady = false;
-  choosing = false; selectedWindowId = ""; message(""); render();
+  choosing = false; selectedWindowId = ""; if (inactivityTimer) { clearInterval(inactivityTimer); inactivityTimer = null; } message(""); render();
+}
+async function evaluateInactivity() {
+  const window = windows.find(w => w.id === person?.currentWindowId);
+  if (evaluating || !window || !sessionId || !person?.currentShiftId) return;
+  evaluating = true; try { const learned = learnPace(serviceSamples);
+    if (window.inactivityCheckState === "pending") { if (!waiting.length) await cancelInactivityCheckIfQueueEmpty(window.id, person.currentShiftId, sessionId, window.inactivityCheckId); else await resolveExpiredInactivityCheck(window.id, person.currentShiftId, sessionId, window.inactivityCheckId); }
+    else if (learned.confidence !== "calibrating" && waiting.length && window.state === "active" && !window.currentEntryId) await startInactivityCheck(window.id, person.currentShiftId, sessionId, learned);
+  } catch (error) { console.warn("Inactivity evaluation:", error); } finally { evaluating = false; }
+}
+function syncInactivityTimer() { const active = person?.currentShiftId && windows.some(w => w.id === person.currentWindowId); if (!active) { if (inactivityTimer) { clearInterval(inactivityTimer); inactivityTimer = null; } return; } if (!inactivityTimer) { evaluateInactivity(); inactivityTimer = setInterval(evaluateInactivity, 30000); } }
+$("inactivityModal").addEventListener("cancel", event => event.preventDefault());
+function syncInactivityModal() {
+  const modal = $("inactivityModal");
+  const window = windows.find(w => w.id === person?.currentWindowId);
+  const pending = person?.currentShiftId && window?.currentShiftId === person.currentShiftId
+    && window.currentStaffId === person.id && window.inactivityCheckState === "pending";
+  if (!pending) { if (modal.open) modal.close(); return; }
+  $("inactivityPrompt").textContent = "Hi " + person.name + ", are you still at " + displayWindowLabel(window.name) + "?";
+  $("inactivityConfirm").disabled = busy;
+  $("inactivityConfirm").onclick = () => perform(() => confirmInactivityCheck(window.id, window.currentShiftId, window.inactivityCheckId), "Customers are waiting. Call next when ready.");
+  if (!modal.open) { $("inactivityFeedback").textContent = ""; modal.showModal(); }
 }
 function render() {
+  syncInactivityModal();
   $("entry").hidden = Boolean(candidate || person);
   $("confirmation").hidden = !candidate || Boolean(person);
   $("operation").hidden = !person;
@@ -72,17 +109,18 @@ function render() {
   if (!personReady || !windowsReady) { host.append(element("p", "Loading current assignment. If this persists, check your connection and reload.")); return; }
   if (!person.active) { host.append(element("p", "Your staff record is inactive. Please ask the manager.")); return; }
   if (!person.currentShiftId) {
+    syncInactivityTimer();
     if (!choosing) {
       host.append(element("p", "You don't have an active shift."), actionButton("START SHIFT", () => { choosing = true; render(); }, busy));
       return;
     }
-    const available = windows.filter(w => w.active && w.state === "available" && !w.currentShiftId);
+    const available = windows.filter(w => w.retired !== true && w.active && w.state === "available" && !w.currentShiftId);
     if (!available.length) { host.append(element("p", "No windows are available. Ask the manager or wait for a window to become available.")); return; }
     const label = element("label", "Choose an available window");
     label.htmlFor = "windowChoice";
     const select = element("select"); select.id = "windowChoice"; select.disabled = busy;
     const placeholder = element("option", "Choose a window"); placeholder.value = ""; select.append(placeholder);
-    for (const window of available) { const option = element("option", window.name); option.value = window.id; select.append(option); }
+    for (const window of available) { const option = element("option", displayWindowLabel(window.name)); option.value = window.id; select.append(option); }
     if (!available.some(w => w.id === selectedWindowId)) selectedWindowId = "";
     select.value = selectedWindowId;
     const button = actionButton("START AT SELECTED WINDOW", () => perform(async () => { await startShift(person.id, selectedWindowId); choosing = false; selectedWindowId = ""; }, "Shift started."), busy || !selectedWindowId);
@@ -95,19 +133,20 @@ function render() {
     host.append(element("p", "Updating your assignment... If this persists, reload or ask the manager."));
     return;
   }
-  host.append(element("h3", window.name), element("span", window.state, "state"));
+  host.append(element("h3", displayWindowLabel(window.name)), element("span", window.state, "state"));
   host.append(element("p", window.currentEntryId ? "Called: " + window.currentTicketLabel : "No customer currently called.", window.currentEntryId ? "ticket" : "muted"));
   const actions = element("div", undefined, "actions");
-  actions.append(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId), ticket => ticket ? "Called " + ticket + " to " + window.name + "." : "No one is waiting."), busy || !queueReady || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)));
+  actions.append(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting."), busy || !queueReady || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)));
   if (window.currentEntryId) actions.append(actionButton("COMPLETE", () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId), "Customer completed."), busy));
   actions.append(
     actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause")), busy),
     actionButton("END SHIFT", () => {
-      if (confirm("End your shift at " + window.name + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end"), "Shift ended. The window is available.");
+      if (confirm("End your shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end"), "Shift ended. The window is available.");
     }, busy || Boolean(window.currentEntryId))
   );
   host.append(actions);
   if (window.currentEntryId) host.append(element("p", "Complete this customer before ending your shift. Pause keeps your window and customer assigned.", "notice"));
+  syncInactivityTimer();
 }
 $("entryForm").addEventListener("submit", event => {
   event.preventDefault();
@@ -123,8 +162,9 @@ $("confirmButton").addEventListener("click", () => perform(async () => {
     person = value; personReady = true; render();
   }, error => { personReady = false; console.error(error); message("Unable to load your current staff record. Check your connection and reload.", true); render(); });
 }, "Staff record confirmed."));
-watchWindows(value => { windows = value; windowsReady = true; render(); }, error => { windowsReady = false; console.error(error); message("Unable to load windows. Check your connection and Firebase setup, then reload.", true); render(); });
-watchQueue(queue => { sessionId = queue?.currentSessionId || null; queueReady = Boolean(sessionId); render(); }, error => { queueReady = false; console.error(error); message("Unable to load the operational session. Check your connection and reload.", true); render(); });
+watchWindows(value => { windows = value.filter(w => w.retired !== true); windowsReady = true; render(); }, error => { windowsReady = false; console.error(error); message("Unable to load windows. Check your connection and Firebase setup, then reload.", true); render(); });
+watchQueue(queue => { const next = queue?.currentSessionId || null; if (next !== sessionId) { if (stopWaiting) stopWaiting(); waiting = []; sessionId = next; if (sessionId) stopWaiting = watchEntries(sessionId, "waiting", value => { waiting = value; render(); }, console.warn); } queueReady = Boolean(sessionId); render(); }, error => { queueReady = false; console.error(error); message("Unable to load the operational session. Check your connection and reload.", true); render(); });
+watchServiceSamples(value => { serviceSamples = value; render(); }, console.warn);
 render();
 </script>
 </body>
