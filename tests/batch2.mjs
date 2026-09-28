@@ -46,19 +46,13 @@ const reset = await fetch(emulator + "/emulator/v1/projects/" + project + "/data
 assert(reset.ok, await reset.text());
 const server = http.createServer((request, response) => {
   const file = decodeURIComponent(new URL(request.url, "http://localhost").pathname).slice(1) || "index.html";
-  if (!["index.html", "business.html", "staff.html", "turncue.js", "turncue.css"].includes(file)) { response.writeHead(404).end(); return; }
+  if (!["index.html", "business.html", "staff.html", "turncue.js", "environment.js", "firebase-client.js", "turncue.css"].includes(file)) { response.writeHead(404).end(); return; }
   let content = fs.readFileSync(path.join(root, file), "utf8");
   if (file === "turncue.js") {
-    content = content.replace("getFirestore, doc,", "getFirestore, connectFirestoreEmulator, doc,");
-    content = content.replace("getFirestore(initializeApp(firebaseConfig));", 'getFirestore(initializeApp(firebaseConfig));\nconnectFirestoreEmulator(db, "127.0.0.1", 8787);');
     // Test-only gate forces two devices to select the same candidate.
     content = content.replace("const candidateRef = candidates.docs[0].ref;", "const candidateRef = candidates.docs[0].ref; await window.__candidateSelected?.(candidateRef.id);");
   }
-  if (file === "index.html") {
-    content = content.replace("getFirestore,", "getFirestore, connectFirestoreEmulator,");
-    content = content.replace("const db = getFirestore(app);", 'const db = getFirestore(app);\nconnectFirestoreEmulator(db, "127.0.0.1", 8787);');
-  }
-  content = content.replaceAll("turncue-83e1a", project);
+  if (file === "environment.js") content = content.replaceAll("demo-turncue-local", project);
   response.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html");
   response.end(content);
 });

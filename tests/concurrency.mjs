@@ -3,6 +3,7 @@
 // XMLHttpRequest transport. SDK transactions/retries are not reimplemented.
 // Run with Node --experimental-vm-modules; set TURNCUE_TEST_ASSETS to cached SDKs.
 import fs from "node:fs";
+import { compileRules, testProject } from "./support/emulator.mjs";
 import path from "node:path";
 import vm from "node:vm";
 import assert from "node:assert/strict";
@@ -13,7 +14,7 @@ const assets = process.env.TURNCUE_TEST_ASSETS;
 const mode = process.argv[2];
 assert(["join", "call"].includes(mode), "Use join or call.");
 assert(assets, "TURNCUE_TEST_ASSETS is required.");
-const projectId = "demo-turncue-focused";
+const projectId = testProject("concurrency-" + mode);
 const endpoint = "http://127.0.0.1:8787";
 const base = endpoint + "/v1/projects/" + projectId + "/databases/(default)/documents";
 const scope = { businessId: "demo-business", locationId: "main-location", queueId: "main-queue" };
@@ -71,12 +72,9 @@ async function load(identifier) {
   const file = identifier === sdkUrl ? path.join(assets, "firebase-firestore.js")
     : identifier === appUrl ? path.join(assets, "firebase-app.js") : identifier;
   let source = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
+  if (identifier.endsWith("environment.js")) source = source.replaceAll("demo-turncue-local", projectId);
+  if (identifier.endsWith("firebase-client.js")) source = source.replace("resolveEnvironment(globalThis.location)", 'resolveEnvironment({ hostname: "localhost" })');
   if (identifier.endsWith("turncue.js")) {
-    // Redirect initialization only, without changing operation implementations.
-    source = source.replace('getFirestore, doc,', 'getFirestore, connectFirestoreEmulator, doc,');
-    source = source.replace('getFirestore(initializeApp(firebaseConfig));',
-      'getFirestore(initializeApp(firebaseConfig)); connectFirestoreEmulator(db, "127.0.0.1", 8787);');
-    source = source.replaceAll("turncue-83e1a", projectId);
     source = source.replace("const candidateRef = candidates.docs[0].ref;",
       "const candidateRef = candidates.docs[0].ref; await globalThis.candidateGate(candidateRef.id, windowId);");
   }
@@ -87,7 +85,7 @@ async function load(identifier) {
   }
   const module = new vm.SourceTextModule(source, { identifier });
   modules.set(identifier, module);
-  await module.link(specifier => load(specifier));
+  await module.link(specifier => load(specifier.startsWith(".") ? path.resolve(path.dirname(identifier), specifier) : specifier));
   return module;
 }
 function gate(count) {
@@ -145,6 +143,7 @@ async function list(name) {
 const openSession = { ...scope, status: "open", ticketPrefix: "A", nextTicketNumber: 101, openedAt: new Date(), closedAt: null };
 
 async function run() {
+  await compileRules(projectId);
   const sdkModule = await load(sdkUrl);
   await sdkModule.evaluate();
   const sdk = sdkModule.namespace;

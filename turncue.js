@@ -1,24 +1,13 @@
 // Shared Batch 2 operations. Staff ID confirmation is NOT authentication.
-import { initializeApp } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+import { db, BUSINESS_ID, LOCATION_ID, QUEUE_ID } from "./firebase-client.js";
+export { db, BUSINESS_ID, LOCATION_ID, QUEUE_ID } from "./firebase-client.js";
 import {
-  getFirestore, doc, collection, getDoc, getDocFromServer, getDocsFromServer, query, where,
+  doc, collection, getDoc, getDocFromServer, getDocsFromServer, query, where,
   orderBy, limit, startAfter, onSnapshot, runTransaction, serverTimestamp, Timestamp
 } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 import { isInactivityDue, pendingCheckDecision } from "./inactivity.js";
 import { normalizeWindowLabel } from "./bulk-setup.js";
 
-const firebaseConfig = {
-  apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
-  authDomain: "turncue-83e1a.firebaseapp.com",
-  projectId: "turncue-83e1a",
-  storageBucket: "turncue-83e1a.firebasestorage.app",
-  messagingSenderId: "459437201769",
-  appId: "1:459437201769:web:1859490f3db0f3fc2945f8"
-};
-export const db = getFirestore(initializeApp(firebaseConfig));
-export const BUSINESS_ID = "demo-business";
-export const LOCATION_ID = "main-location";
-export const QUEUE_ID = "main-queue";
 const scope = { businessId: BUSINESS_ID, locationId: LOCATION_ID, queueId: QUEUE_ID };
 const ref = (name, id) => doc(db, name, id);
 const newRef = name => doc(collection(db, name));

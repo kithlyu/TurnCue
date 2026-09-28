@@ -37,11 +37,9 @@ async function load(identifier) {
   if (modules.has(identifier)) return modules.get(identifier);
   const file = identifier === sdkUrl ? path.join(assets, "firebase-firestore.js") : identifier === appUrl ? path.join(assets, "firebase-app.js") : identifier;
   let source = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-  if (identifier.endsWith("turncue.js")) {
-    source = source.replace("getFirestore, doc,", "getFirestore, connectFirestoreEmulator, doc,");
-    source = source.replace("getFirestore(initializeApp(firebaseConfig));", 'getFirestore(initializeApp(firebaseConfig)); connectFirestoreEmulator(db, "127.0.0.1", 8787);');
-    source = source.replaceAll("turncue-83e1a", project);
-  }
+  if (identifier.endsWith("environment.js")) source = source.replaceAll("demo-turncue-local", project);
+  if (identifier.endsWith("firebase-client.js")) source = source.replace("resolveEnvironment(globalThis.location)", 'resolveEnvironment({ hostname: "localhost" })');
+
   const module = new vm.SourceTextModule(source, { identifier }); modules.set(identifier, module);
   await module.link(specifier => load(specifier.startsWith(".") ? path.resolve(path.dirname(identifier), specifier) : specifier));
   return module;

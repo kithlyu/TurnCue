@@ -1,0 +1,24 @@
+# TurnCue Development Rules
+
+- Work in focused feature slices.
+- Preserve accepted behavior from prior batches.
+- Stop after the first meaningful focused test failure.
+- Diagnose whether a failure is in product code, tests, Firestore rules, or test infrastructure before changing code.
+- Make one surgical fix at a time.
+- Rerun only the relevant focused test after a fix.
+- Conserve Codex usage: avoid broad reruns and repeated repair loops.
+- Do not commit, push, deploy, or publish without explicit review.
+- Use transactions for race-sensitive behavior.
+- Prefer additive Firestore schema changes.
+- Keep Firestore reads bounded where practical.
+- Preserve immutable operational history.
+- Avoid unnecessary frameworks or rewrites.
+- Do not over-engineer beyond the current product need.
+- Treat staff names as display data, not permanent identity.
+- TurnCue-generated Staff IDs are the permanent staff identity.
+- Staff import must never assign windows or shifts.
+- Window labels must remain unique within a queue.
+- Keep current implementation limitations honest, especially client-side Spark behavior.
+- Capture important architecture decisions for later documentation.
+- When a product idea is outside the active batch, do not implement it automatically.
+- Prefer a narrow recommendation and stop if a product decision is required.

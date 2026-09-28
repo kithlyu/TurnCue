@@ -406,11 +406,10 @@ import { displayWindowLabel } from "./window-label.js";
     import { joinEntry } from "./join-entry.js";
     import { estimateWait, etaCopy, createEtaTicker } from "./eta.js";
 
-    import { initializeApp }
-      from "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js";
+    import { db, environment, BUSINESS_ID, LOCATION_ID, QUEUE_ID } from "./firebase-client.js";
+    import { recoveryKeys, migrateProductionRecovery } from "./environment.js";
 
     import {
-      getFirestore,
       doc,
       getDoc,
       collection,
@@ -425,33 +424,7 @@ import { displayWindowLabel } from "./window-label.js";
     } from "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
 
 
-    const firebaseConfig = {
-      apiKey: "AIzaSyCngq4CXYVHXBqr_zipMgIqPiDWxzlpIVM",
-      authDomain: "turncue-83e1a.firebaseapp.com",
-      projectId: "turncue-83e1a",
-      storageBucket: "turncue-83e1a.firebasestorage.app",
-      messagingSenderId: "459437201769",
-      appId: "1:459437201769:web:1859490f3db0f3fc2945f8"
-    };
-
-
-    const app = initializeApp(firebaseConfig);
-    const db = getFirestore(app);
-
-
-    const BUSINESS_ID =
-      "demo-business";
-
-    const LOCATION_ID =
-      "main-location";
-
-    const QUEUE_ID =
-      "main-queue";
-
-
-    const STORAGE_KEY =
-      "turncue_active_entry";
-
+    const { entry: STORAGE_KEY, cue: CUE_STORAGE_KEY } = recoveryKeys(environment);
 
     const loadingScreen =
       document.getElementById(
@@ -622,6 +595,7 @@ import { displayWindowLabel } from "./window-label.js";
     function getSavedEntry() {
 
       try {
+        migrateProductionRecovery(localStorage, environment);
 
         const value =
           localStorage.getItem(
@@ -1131,10 +1105,10 @@ import { displayWindowLabel } from "./window-label.js";
       const copy = etaCopy(estimate);
       document.getElementById("etaStatus").innerHTML = "<strong>" + copy.title + "</strong><br>" + copy.detail;
       const cueKey = currentSessionId + ":" + myEntryId;
-      if (copy.numeric && estimate.minutes <= 5 && localStorage.getItem("turncue_get_ready") !== cueKey) {
-        localStorage.setItem("turncue_get_ready", cueKey);
+      if (copy.numeric && estimate.minutes <= 5 && localStorage.getItem(CUE_STORAGE_KEY) !== cueKey) {
+        localStorage.setItem(CUE_STORAGE_KEY, cueKey);
         document.getElementById("getReady").hidden = false;
-      } else if (localStorage.getItem("turncue_get_ready") === cueKey) document.getElementById("getReady").hidden = false;
+      } else if (localStorage.getItem(CUE_STORAGE_KEY) === cueKey) document.getElementById("getReady").hidden = false;
       if (copy.numeric && !entryData.firstNumericEtaShownAt && !firstEtaWriteAttempted) {
         firstEtaWriteAttempted = true;
         updateDoc(doc(db, "sessions", currentSessionId, "entries", myEntryId), { firstNumericEtaShownAt: serverTimestamp(), firstEtaLowerMinutes: copy.lower, firstEtaUpperMinutes: copy.upper, firstEtaMode: copy.mode }).catch(() => {

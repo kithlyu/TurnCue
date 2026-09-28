@@ -1,0 +1,21 @@
+{
+  "name": "turncue",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "^22.7.0 || ^24.0.0"
+  },
+  "scripts": {
+    "test": "node scripts/test.mjs fast",
+    "test:fast": "node scripts/test.mjs fast",
+    "test:setup": "node scripts/test-setup.mjs",
+    "test:rules": "node scripts/test.mjs rules",
+    "test:browser": "node scripts/test.mjs browser",
+    "test:concurrency": "node scripts/test.mjs concurrency",
+    "test:integration": "node scripts/test.mjs integration",
+    "test:release": "node scripts/test.mjs release"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

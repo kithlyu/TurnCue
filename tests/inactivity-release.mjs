@@ -1,5 +1,6 @@
 // Maintained Batch 3 serial and concurrent inactivity checkpoint; loopback only.
 import fs from "node:fs";
+import { compileRules, testProject } from "./support/emulator.mjs";
 import path from "node:path";
 import vm from "node:vm";
 import assert from "node:assert/strict";
@@ -8,7 +9,7 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const assets = process.env.TURNCUE_TEST_ASSETS;
 assert(assets, "TURNCUE_TEST_ASSETS is required.");
-const endpoint = "http://127.0.0.1:8787", project = "demo-turncue-inactivity-" + Date.now();
+const endpoint = "http://127.0.0.1:8787", project = testProject("inactivity");
 const base = endpoint + "/v1/projects/" + project + "/databases/(default)/documents";
 const scope = { businessId: "demo-business", locationId: "main-location", queueId: "main-queue" };
 
@@ -35,11 +36,9 @@ async function load(identifier) {
   if (modules.has(identifier)) return modules.get(identifier);
   const file = identifier === sdkUrl ? path.join(assets, "firebase-firestore.js") : identifier === appUrl ? path.join(assets, "firebase-app.js") : identifier;
   let source = fs.readFileSync(file, "utf8").replace(/^\uFEFF/, "");
-  if (identifier.endsWith("turncue.js")) {
-    source = source.replace("getFirestore, doc,", "getFirestore, connectFirestoreEmulator, doc,");
-    source = source.replace("getFirestore(initializeApp(firebaseConfig));", 'getFirestore(initializeApp(firebaseConfig)); connectFirestoreEmulator(db, "127.0.0.1", 8787);');
-    source = source.replaceAll("turncue-83e1a", project);
-  }
+  if (identifier.endsWith("environment.js")) source = source.replaceAll("demo-turncue-local", project);
+  if (identifier.endsWith("firebase-client.js")) source = source.replace("resolveEnvironment(globalThis.location)", 'resolveEnvironment({ hostname: "localhost" })');
+
   const module = new vm.SourceTextModule(source, { identifier }); modules.set(identifier, module);
   await module.link(specifier => load(specifier.startsWith(".") ? path.resolve(path.dirname(identifier), specifier) : specifier));
   return module;
@@ -63,9 +62,7 @@ async function list(name) {
 
 
 const originalRules = fs.readFileSync(path.join(root, 'firestore.rules'), 'utf8');
-const response = await fetch(endpoint + '/emulator/v1/projects/' + project + ':securityRules', {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({rules:{files:[{name:'firestore.rules',content:originalRules}]}})});
-const compilation = await response.json(); assert(response.ok); assert(!compilation.issues?.some(x=>x.severity==='ERROR'), JSON.stringify(compilation));
-console.log('PASS current rules compile; project '+project);
+await compileRules(project);
 const module = await load(path.join(root,'turncue.js')); await module.evaluate();
 const app = module.namespace, sdk = (await load(sdkUrl)).namespace;
 const learned = {confidence:'early',paceMinutes:8};
@@ -80,11 +77,13 @@ async function fixture(id,waiting=true) {
 }
 function cleared(w) { for(const key of ['inactivityCheckState','inactivityCheckId','inactivityCheckStartedAt','inactivityCheckDeadline']) assert.equal(w[key],null,key); }
 let currentCase='1 uncontended start';
+let w;
 try {
+  if (!process.argv.includes('--concurrent-only')) {
   await fixture('serial-start');
   const beforeConfirmation=await read('windows/serial-start');
   const check=await app.startInactivityCheck('serial-start','serial-start','serial-start',learned);
-  assert(check); let w=await read('windows/serial-start'); assert.equal(w.inactivityCheckState,'pending'); assert.equal(w.inactivityCheckId,check); assert.equal((await events('serial-start','inactivity_check_started')).length,1);
+  assert(check); w=await read('windows/serial-start'); assert.equal(w.inactivityCheckState,'pending'); assert.equal(w.inactivityCheckId,check); assert.equal((await events('serial-start','inactivity_check_started')).length,1);
   console.log('PASS 1 uncontended start: pending, exactly one start event');
   currentCase='2 confirmation';
   await app.confirmInactivityCheck('serial-start','serial-start',check);
@@ -105,6 +104,7 @@ try {
   assert.equal(await app.resolveExpiredInactivityCheck('serial-expiry','serial-expiry','serial-expiry',expiryCheck),'auto_paused');
   w=await read('windows/serial-expiry'); cleared(w); assert.equal(w.state,'paused'); assert.equal(w.currentShiftId,'serial-expiry'); assert.equal(w.currentStaffId,'serial-expiry'); assert.equal(w.reviewFlagType,'inactivity_check'); assert(w.reviewFlagAt); assert.equal(w.pauseSource,'inactivity_check'); const shift=await read('shifts/serial-expiry'); assert.equal(shift.state,'paused'); assert.equal(shift.endedAt,null); assert.equal((await events('serial-expiry','window_auto_paused')).length,1);
   console.log('PASS 4 real expiry: one auto-pause, retained assignment, review flag');
+  }
   currentCase='5 concurrent start';
   await fixture('concurrent-start');
   const results=await Promise.allSettled([app.startInactivityCheck('concurrent-start','concurrent-start','concurrent-start',learned),app.startInactivityCheck('concurrent-start','concurrent-start','concurrent-start',learned)]);

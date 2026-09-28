@@ -1,76 +1,66 @@
 # TurnCue
 
-Virtual queue pilot, Batch 3: ETA learning, inactivity checks, staff import, and window operations. GitHub Pages serves these files directly; no build step.
+Static browser-based virtual queue pilot. GitHub Pages serves the customer (`index.html`), manager (`business.html`), and staff (`staff.html`) pages directly; there is no frontend build step.
 
-## Batch 3A ETA learning
+## Engineering guide
 
-TurnCue stores one deterministic service sample per Batch 2 customer at `queues/{queueId}/serviceSamples/{entryId}`. A call starts as eligible; pausing while that customer remains assigned marks it ineligible. The app fetches the newest 40 samples, then filters for eligibility. With fewer than 3 it calibrates; at 3 it uses the median. Later, each sample is winsorized to three median absolute deviations (at least ±2 minutes) around the raw median, then a weighted median gives newer samples weights 1..N. This preserves truthful outliers while damping their customer-facing effect.
+| Document | Purpose |
+| --- | --- |
+| [DEVELOPMENT.md](DEVELOPMENT.md) | Branches, review/approval gates, annotated release tags, and release ledger |
+| [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md) | Canonical current release process and production smoke test |
+| [ROLLBACK.md](ROLLBACK.md) | Recovery after a bad release; separate frontend/rules decisions and data limits |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Current runtime, data relationships, invariants, and pilot limitations |
+| [tests/README.md](tests/README.md) | Pinned tooling, maintained commands, isolation, and historical test classification |
+| [AGENTS.md](AGENTS.md) | Focused development rules |
 
-ETA becomes Stable only with at least 5 samples and a recent-five MAD no greater than 25% of their median (minimum 1 minute); otherwise it remains an Early rounded 5-minute range. For each active staffed window, ETA starts from its current customer's estimated remaining time, or a conservative 25%-of-pace cushion (2–5 minutes) if overdue. Waiting customers are then assigned in order to the next available window. Paused and unstaffed windows contribute no capacity. Batch 3A is client-side learning only; its ETA is not a guarantee, and history/prediction writes remain subject to the trusted-pilot security model.
+Batch 3 is released and production smoke tested at `b3b08809a2b8f4e0ff3d1fac672c8b63683ec688`. The accepted engineering foundation remains local and uncommitted; local acceptance does not publish it. See the intentionally incomplete release ledger in DEVELOPMENT.md for evidence requirements.
 
-## Batch 3B-1 inactivity core
+An approved push to `main` automatically triggers GitHub Pages publication; verify deployment success and its source commit. Firestore rules deploy separately. Use RELEASE_CHECKLIST.md for both surfaces; it supersedes the old Firebase Console copy/publish instructions and Batch 1/2 release advice.
 
-The core creates a persisted two-minute pending check only when an active, assigned, empty window has a waiting customer and has been idle for twice the learned service pace. Confirmation resets `lastActionAt`; an expired check auto-pauses only after re-verifying a current waiting entry, otherwise it is cancelled as `queue_empty`. This Spark-pilot safeguard is best-effort: a manager or staff page must remain open to initiate or resolve checks; both pages evaluate every 30 seconds. Persisted state survives refreshes, and transactions make each pending/confirmation/auto-pause transition single-winner; it is not a server-side watchdog.
+## Install and check
 
-- Customer: https://kithlyu.github.io/TurnCue/
-- Manager: https://kithlyu.github.io/TurnCue/business.html
-- Staff: https://kithlyu.github.io/TurnCue/staff.html
+Use Node **22.7+ within 22.x, or 24.x**, npm, and **Java 21+**. From the repository root:
 
-## Architecture
+```powershell
+npm ci
+npm run test:setup
+npm run test:fast
+```
 
-The manager’s ADD WINDOWS modal previews numbered or lettered windows as inputs change; custom-label creation is not offered in the beta UI. Quantity means additional windows (1–26 per request). Numbered and lettered series independently continue after the highest existing canonical label in this queue, including CLOSED and retired windows with canonical labels. Gaps are not filled: 1 and 5 lead to 6; A and D lead to E. Custom labels outside the numbered or single-letter patterns do not advance either series. Letters stop at Z; numbered labels must stay within JavaScript's safe integer range. Changing the series or quantity updates the preview automatically. Cancel closes without creating windows; successful creation updates the live window list without assigning staff.
+Setup provisions pinned tooling in `.test-tools/`; no manual emulator JAR or global browser installation is needed. On Windows, use `npm.cmd` if PowerShell blocks `npm.ps1`. See [tests/README.md](tests/README.md) for Java discovery and platform prerequisites. The maintained release command is `npm run test:release`. Run commands serially; emulator-backed checks own port 8787, so stop local development first.
 
-Business → Location → Queue → Operational Session → Entries stays unchanged. The manager page initializes the development foundation and a session if needed. Development IDs remain `demo-business`, `main-location`, and `main-queue`.
+## Safe local development
 
-Managers register staff individually or import a CSV with exactly `name,role` columns (`staff` or `manager`). The import previews valid/invalid rows and creates records from a valid preview with new permanent TurnCue Staff IDs; names are display data, not identity. Import never assigns windows or creates shifts. Managers configure windows. Staff enter their generated ID, confirm their name, and explicitly choose an available window. A manager is a staff record with `role: manager` and can use the same staff page.
+After setup, make Java available as `java` on PATH and use two terminals from the repository root:
 
-`turncue.js` shares Firestore operations between manager and staff pages; `turncue.css` shares their styling. The customer page retains the Batch 1 lifecycle, device recovery, tickets, and timing, with the called window added. Its ticket transaction is shared through join-entry.js: entry creation and the exact +1 counter update remain atomic. A bounded retry reuses the same entry ID only when a permission failure is accompanied by a server-confirmed counter advance; other permission errors surface.
+```powershell
+# Terminal 1: provisioned emulator, isolated demo project, current rules.
+java -jar .test-tools/cloud-firestore-emulator-v1.22.0.jar --host 127.0.0.1 --port 8787 --rules firestore.rules --project_id demo-turncue-local
+```
 
-- `staff/{id}`: permanent random internal ID; `staffCode`, `name`, `role`, `active`, `businessId`, `currentShiftId`, `currentWindowId`, `createdAt`, `updatedAt`.
-- `staffCodes/{TC-XXXXXXXX}`: immutable visible-ID lookup with `staffId`, `businessId`, `createdAt`. IDs are reserved transactionally and never reused.
-- `windows/{id}`: permanent resource with business/location/queue IDs, `name`, configured `active`, live `state` (`available`, `active`, `paused`, `inactive`), current staff/shift/entry/session/ticket pointers, `lastActionAt`, `stateChangedAt`, `lastEventId`, and creation/update timestamps.
-- `shifts/{id}`: staff/window/scope IDs, `state` (`active`, `paused`, `ended`), exact `startedAt`/`endedAt`, current entry/session, `lastActionAt`. Ending clears live pointers, never removes history.
-- `windowEvents/{id}`: append-only events with scope, staff/window/shift IDs, `type`, `fromState`, `toState`, `source` (`staff`, `manager`, or `inactivity_check`), `occurredAt`; customer events include session/entry IDs. `shift_started` also records the window becoming active; `shift_ended` records it becoming available. Pause/resume and call/completion are separate events.
-- `sessions/{sessionId}/entries/{entryId}`: Batch 1 fields retained. Calls add `calledByStaffId`, `calledByShiftId`, `calledWindowId`, `calledWindowLabel`. No new serving state.
+```powershell
+# Terminal 2: compile current rules into the local project, then serve pages.
+node scripts/dev.mjs
+```
 
-Start Shift updates staff, window, shift, and history atomically. One staff record can point to one shift, and one window can have one owner. Pause retains ownership and any called customer. End Shift requires no unresolved called customer. Window labels are immutable after creation for beta. Closing a window and staff deactivation require ending the shift first.
+Open [local manager](http://127.0.0.1:8080/business.html) first to initialize local data, then [local staff](http://127.0.0.1:8080/staff.html) and [local customer](http://127.0.0.1:8080/). The server can use an existing loopback emulator on that port, always loads current rules, and stops if setup fails. Restart it after rules edits; reload pages after runtime edits. Ctrl+C stops each process. Emulator data is not exported or preserved across restarts.
 
-Call Next fetches the earliest waiting entry from the server, then transactionally rechecks that entry, the window, owner, shift, and current session. The transaction assigns the entry and updates the window/shift together. A losing caller fetches another candidate and retries (up to 12 fresh candidates, in addition to the SDK's transaction retries). Exhausted contention reports failure, never success. Completion clears both current-entry pointers atomically. A stale tab cannot act on a replacement shift. Existing Batch 1 called entries without a window can still be completed by the manager.
+Loopback pages use only `demo-turncue-local` at `127.0.0.1:8787`; an unavailable emulator blocks initialization with a development error. Unknown hosts are blocked and there is no production fallback. No Firebase login or cloud project is needed. Ordinary development downloads the pinned SDK from Google's CDN, not Firestore data; maintained browser tests serve that SDK from disk and block external requests.
 
-This is a trusted pilot, not secure authentication. Staff ID confirmation and manager access are not authorization boundaries. Rules provide pilot integrity: document shapes, local state transitions, immutable identity/history fields, and no deletes. They contain no cross-document lookups and cannot establish who is operating the browser. Ownership, active shifts, unresolved customers, waiting-candidate checks, atomic history writes, and one-assignment checks remain in client transactions. Direct API callers can bypass these cross-document client safeguards; this is not production staff authentication. Reads remain public, including the roster. No PIN, Cloud Functions, Blaze, or production authentication was added.
+Recovery keys are environment/scope-qualified. Use the same hostname, port, and browser profile for local ticket recovery. See [architecture](docs/ARCHITECTURE.md) for production configuration and legacy recovery handling.
 
-## Manual Firebase steps
+## Coordinated manual smoke guide
 
-Nothing is deployed automatically.
+Use the local emulator before publication: one manager browser, two staff profiles, and three customer profiles. Production testing requires separate explicit approval for live operational writes and follows [RELEASE_CHECKLIST.md](RELEASE_CHECKLIST.md). Do not reset real sessions or data to create fixtures.
 
-1. In Firebase project **turncue-83e1a**, open **Firestore Database → Rules**. Replace the entire rules editor with `firestore.rules` and publish.
-2. Keep the existing `entries` collection-scope composite indexes: `status ASC + joinedAt ASC` and `status ASC + calledAt ASC`. `firestore.indexes.json` records these two known indexes.
-3. No new composite indexes are expected: staff uses only `businessId == ...`, windows only `queueId == ...`, and Staff ID lookup is a direct document read. Keep automatic single-field indexes enabled for these fields. If Firebase reports a missing index, use its generated link from the browser console.
-4. Do not delete old `/queue` documents or their indexes. This index file intentionally does not invent definitions for the historical indexes that were not included in the handoff. It is not a complete export of the deployed project's indexes; do not use it to remove indexes.
-5. After separately approving and publishing the repository changes through GitHub Pages, reload all manager/staff tabs. Old Batch 1 dashboard Call Next writes will be rejected by the new assignment rules. Existing customer tabs remain compatible.
-6. Open the manager URL. It preserves the current open session. Register staff and add windows through the page; no manual Firestore document setup is required. Then run the test below.
+1. Confirm the manager preserves the current open session. Register two test staff and configure two windows locally; use agreed pilot participants/resources in production.
+2. Have both staff claim the same window nearly simultaneously. Exactly one succeeds; the loser explicitly chooses the other window. Verify the same staff cannot claim a second window from another tab.
+3. Join three customers; verify unique sequential tickets and live positions. Close/reopen one page in the same profile: its ticket returns without another entry.
+4. Call Next concurrently on both staff pages. They receive different customers, the earliest two tickets, with correct window labels. An occupied window cannot call again.
+5. Pause an occupied window: ownership/customer remain and Call Next/End Shift are blocked. Complete while paused; check customer completion/timing and that Resume is needed to return the window to OPEN.
+6. Cancel the third waiting customer and check the manager list. Complete the other called customer from the manager; its staff page releases the customer immediately.
+7. Check manager Pause/Resume synchronization. End a resolved shift and start another staff member after a gap; preserve both shift timestamps and the gap.
+8. Deactivate/reactivate an unassigned staff member and verify the same permanent ID works again. CLOSE/OPEN an unassigned window without changing its label. Active shifts must block these configuration changes.
+9. Inspect local emulator history for shift, pause/resume, and call/completion events and retained earlier sessions. Any production history inspection also requires explicit approval. Check for duplicate assignments or overlapping ownership. If a historical called entry without a window exists, verify manager completion compatibility; do not manufacture legacy production data.
 
-## One coordinated multi-device test
-
-Use a manager browser, two separate staff devices/browser profiles, and three customer devices/profiles. Use a customer with an existing Batch 1 called entry too, if one exists.
-
-1. On the manager page, confirm the existing operational session remains. Complete any earlier Batch 1 called entry. Register Maria as Staff and John as Manager, note their Staff IDs, and configure Window 1 and Window 2.
-2. Both staff enter their own ID and confirm their name. Both choose Window 1 and start at nearly the same time. Exactly one must own it. The other must see an availability error and explicitly choose Window 2. Verify one staff cannot claim a second window from another tab.
-3. Join three customers. Verify sequential unique tickets, live positions, and waiting states. Close/reopen one customer page using the same browser/profile: the same ticket returns without another entry.
-4. Press Call Next on both staff devices together. They must receive different waiting customers, with the two earliest tickets called. Each customer sees the correct window. Calling again while occupied must be blocked.
-5. Pause an occupied window. Ownership and its called customer stay in place; Call Next and End Shift remain blocked. Complete that customer while paused. Verify the customer completion screen and wait/service/total time, and that the window stays PAUSED until Resume returns it to OPEN.
-6. Have the third waiting customer leave and confirm cancellation and the manager's live waiting list. Complete the other called customer from the manager dashboard. The owning staff screen should release that customer immediately.
-7. Use manager Pause/Resume on an assigned window and verify the staff screen follows. End a resolved shift. Confirm the window becomes OPEN and available for a new shift. Start another staff member there after a short gap; verify the old shift's `endedAt` and new shift's `startedAt` preserve the gap.
-8. Mark an unassigned staff member inactive and confirm their ID cannot enter; reactivate and reuse the same permanent record. CLOSE/OPEN an unassigned window and confirm its label stays unchanged. Confirm no rename action is offered; window labels are permanent for beta. Confirm active shifts block deactivation/configuration changes.
-9. Inspect `shifts` and `windowEvents` in Firebase: start/end, pause/resume, and call/completion timestamps remain; previous sessions, entries, and `/queue` data still exist. No duplicate customer assignment or overlapping ownership should have occurred.
-
-Production network behavior and deployed indexes require this manual pilot test in addition to local validation. The coordinated Batch 3 smoke test is complete and green.
-
-
-## Window Operations UX
-
-Normal manager window labels are OPEN (`active: true`, stored `available` or `active`), PAUSED (`active: true`, stored `paused`), and CLOSED (`active: false`, stored `inactive`). Retired windows remain hidden and excluded from normal manager/staff operations, shift selection, inactivity evaluation, and ETA capacity; their records and history are preserved. Closing/reopening reuses `window_disabled`/`window_enabled` history and the existing transaction; no new fields or migration are needed. Closed windows stay configured, but cannot start shifts or contribute capacity. Closing requires no staff, shift, customer or session pointers and an available state; pause retains assignment. Existing trusted-pilot and client-side inactivity limitations still apply.
-
-## Batch 3 release checkpoint
-
-Automated regression and the coordinated manager/staff/customer manual smoke test were reported green before release-prep. For the maintained, local-only release checkpoint and legacy test caveats, see [tests/README.md](tests/README.md). No deployment is implied by this checkpoint.
+Production network/index behavior still needs the approved production smoke test. Historical Batch 1/2 harnesses are classified in the test README and are not current release gates.

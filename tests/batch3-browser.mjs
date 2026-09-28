@@ -1,11 +1,11 @@
 // Local-only browser/Firestore integration tests. No production requests allowed.
-// Requires Playwright, Chrome/Edge, and the Firestore emulator on 127.0.0.1:8787.
-// Set TURNCUE_TEST_ASSETS to a folder containing the two Firebase 12.19.0 SDK files.
-// NODE_PATH may point to an existing Playwright installation; no app dependency.
+// Run via npm run test:browser: the runner supplies pinned assets and Chromium,
+// owns the loopback emulator, and preloads the test network guard.
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
-import http from "node:http";
+import { startBrowserServer } from "./support/browser-server.mjs";
+import { compileRules, testProject } from "./support/emulator.mjs";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -15,7 +15,7 @@ const { chromium } = require("playwright");
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const assets = process.env.TURNCUE_TEST_ASSETS;
 assert(assets, "Set TURNCUE_TEST_ASSETS to the local SDK folder.");
-const project = "demo-turncue-browser-" + Date.now();
+const project = testProject("browser");
 const emulator = "http://127.0.0.1:8787";
 const api = emulator + "/v1/projects/" + project + "/databases/(default)/documents";
 const sdk = "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js";
@@ -34,38 +34,12 @@ for (const file of ["index.html", "business.html", "staff.html", "turncue.js"]) 
 JSON.parse(fs.readFileSync(path.join(root, "firestore.indexes.json"), "utf8").replace(/^\uFEFF/, ""));
 passed("all JavaScript syntax and index JSON");
 
-const rulesResponse = await fetch(emulator + "/emulator/v1/projects/" + project + ":securityRules", {
-  method: "PUT", headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({ rules: { files: [{ name: "firestore.rules", content: fs.readFileSync(path.join(root, "firestore.rules"), "utf8").replace(/^\uFEFF/, "") }] } })
-});
-const ruleText = await rulesResponse.text();
-assert(rulesResponse.ok, ruleText);
-assert(!JSON.parse(ruleText).issues?.some(x => x.severity === "ERROR"), ruleText);
-passed("current Firestore rules compile in the emulator");
-
-const server = http.createServer((request, response) => {
-  const file = decodeURIComponent(new URL(request.url, "http://localhost").pathname).slice(1) || "index.html";
-  if (!["index.html", "business.html", "staff.html", "turncue.js", "turncue.css", "window-label.js", "window-operations.js", "eta.js", "inactivity.js", "bulk-setup.js", "staff-import.js", "join-entry.js"].includes(file)) { response.writeHead(404).end(); return; }
-  let content = fs.readFileSync(path.join(root, file), "utf8");
-  if (file === "turncue.js") {
-    content = content.replace("getFirestore, doc,", "getFirestore, connectFirestoreEmulator, doc,");
-    content = content.replace("getFirestore(initializeApp(firebaseConfig));", 'getFirestore(initializeApp(firebaseConfig));\nconnectFirestoreEmulator(db, "127.0.0.1", 8787);');
-    // Test-only gate forces two devices to select the same candidate.
-    content = content.replace("const candidateRef = candidates.docs[0].ref;", "const candidateRef = candidates.docs[0].ref; await window.__candidateSelected?.(candidateRef.id);");
-  }
-  if (file === "index.html") {
-    content = content.replace("getFirestore,", "getFirestore, connectFirestoreEmulator,");
-    content = content.replace("const db = getFirestore(app);", 'const db = getFirestore(app);\nconnectFirestoreEmulator(db, "127.0.0.1", 8787);');
-  }
-  content = content.replaceAll("turncue-83e1a", project);
-  response.setHeader("Content-Type", file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html");
-  response.end(content);
-});
-await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+await compileRules(project);
+const server = await startBrowserServer(project);
 const origin = "http://127.0.0.1:" + server.address().port;
 const browser = await chromium.launch({
   headless: true,
-  executablePath: process.env.TURNCUE_TEST_BROWSER || "C:/Program Files/Google/Chrome/Application/chrome.exe"
+  executablePath: process.env.TURNCUE_TEST_BROWSER || undefined
 });
 const errors = [];
 const contexts = [];

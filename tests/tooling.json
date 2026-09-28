@@ -1,0 +1,21 @@
+{
+  "node": "22.7+ or 24.x",
+  "java": "21+",
+  "assets": [
+    {
+      "file": "cloud-firestore-emulator-v1.22.0.jar",
+      "url": "https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.22.0.jar",
+      "sha256": "9b6498b7f62714d67f48f59b3818883cd682dbcd46b9f59511de81c97bb5166c"
+    },
+    {
+      "file": "firebase-app.js",
+      "url": "https://www.gstatic.com/firebasejs/12.19.0/firebase-app.js",
+      "sha256": "39a50952b5def557337b2290069c7d7371f3515ad46c44a43b9c520f734d8d14"
+    },
+    {
+      "file": "firebase-firestore.js",
+      "url": "https://www.gstatic.com/firebasejs/12.19.0/firebase-firestore.js",
+      "sha256": "86cfce95e3b598a2c0188a06b98fa1adc0cdb378bfc0a5ea207dd7627f7e7460"
+    }
+  ]
+}
