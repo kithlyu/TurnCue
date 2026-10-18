@@ -1,4 +1,4 @@
-# Ava — TurnCue Engineering Lead
+# Ava â€” TurnCue Engineering Lead
 
 ## Role
 
