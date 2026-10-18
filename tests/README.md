@@ -77,7 +77,7 @@ This intentionally tests missing Java, absent emulator, and occupied-port refusa
 
 All named test files use `.mjs` under `tests/`.
 
-The browser checkpoint remains narrow: current Add Windows previews/reset/cancel/create and CSV preview/import, unique Staff IDs, no assignment/shift side effects, and no uncaught page errors. Environment coverage verifies three-page scope agreement, same-device recovery, ignored legacy localhost keys, and emulator-outage errors. It is not a full staff/customer lifecycle browser suite.
+The browser checkpoint remains narrow: current Add Windows previews/reset/cancel/create and CSV preview/import, unique Staff IDs, no assignment/shift side effects, and no uncaught page errors. `setup-status` and `setup-status-browser` also cover the manager setup guide: step progress, the same Batch 5A completion rules, and hidden unknown reads. Environment coverage verifies three-page scope agreement, same-device recovery, ignored legacy localhost keys, and emulator-outage errors. It is not a full staff/customer lifecycle browser suite.
 
 JOIN requires six unique consecutive tickets and a matching counter with zero permission errors. CALL forces both clients to select the same first customer, then verifies two distinct assignments and matching pointers; the product's bounded retry may recover an expected candidate-lost permission denial. Inactivity requires exactly one successful start, one matching event, and the persisted pending check; the loser may return null or the previously accepted permission-denied response. Other rejections fail. The known inactivity rules expression-limit diagnostic remains a pilot limitation, not proof of a clean retry path.
 

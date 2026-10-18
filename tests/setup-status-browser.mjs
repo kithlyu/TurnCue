@@ -67,6 +67,7 @@ try {
   const existing = await openManager(existingOrigin);
   await expect(existing.page.locator("#firstUse")).toHaveAttribute("data-setup", "complete", { timeout: 20000 });
   await expect(existing.page.locator("#firstUse")).toBeHidden();
+  await expect(existing.page.locator("#firstUseSteps")).toBeEmpty();
   await expect(existing.page.locator("#sessionStatus")).toHaveText("Queue session ready");
   await expect(existing.page.locator("#sessionDetail")).toHaveText("Operational session: existing-session");
   await expect(existing.page.locator("#roster")).toContainText("Existing Staff");
@@ -90,9 +91,21 @@ try {
   const fresh = await openManager(freshOrigin);
   const manager = fresh.page;
   await expect(manager.locator("#firstUse")).toHaveAttribute("data-setup", "incomplete", { timeout: 20000 });
+  await expect(manager.locator("#firstUse")).toBeVisible();
+  await expect(manager.locator("#firstUseIntro")).toContainText("does not mean someone has started a shift");
   await expect(manager.locator("#firstUseNext")).toHaveText("Next: register a staff member, then add a window. The queue session is already open.");
+  await expect(manager.locator('#firstUseSteps [data-step="session"]')).toHaveAttribute("data-state", "done");
+  await expect(manager.locator('#firstUseSteps [data-step="staff"]')).toHaveAttribute("data-state", "next");
+  await expect(manager.locator('#firstUseSteps [data-step="staff"]')).toHaveAttribute("aria-current", "step");
+  await expect(manager.locator('#firstUseSteps [data-step="staff"]')).toContainText("Register a person in the staff roster below.");
+  await expect(manager.locator('#firstUseSteps [data-step="windows"]')).toHaveAttribute("data-state", "later");
   await expect(manager.locator("#firstUseAction")).toHaveText("REGISTER A STAFF MEMBER");
   await expect(manager.locator("#firstUseAction")).toBeEnabled();
+  await manager.setViewportSize({ width: 390, height: 844 });
+  const phoneCard = await manager.locator("#firstUse").boundingBox();
+  assert(phoneCard && phoneCard.x >= 0 && phoneCard.x + phoneCard.width <= 391, "setup guide overflows the phone width");
+  await expect(manager.locator("#firstUseAction")).toBeVisible();
+  await manager.setViewportSize({ width: 1280, height: 800 });
   await expect(manager.locator("#sessionStatus")).toHaveText("Queue session ready");
   await expect(manager.locator("#staffForm button")).toBeEnabled();
   await expect(manager.locator("#addWindows")).toBeEnabled();
@@ -103,6 +116,7 @@ try {
   await expect(manager.locator("#firstUse")).toHaveAttribute("data-setup", "unknown");
   await expect(manager.locator("#firstUse")).toBeHidden();
   await expect(manager.locator("#firstUseNext")).toHaveText("");
+  await expect(manager.locator("#firstUseSteps")).toBeEmpty();
   await expect(manager.locator("#sessionStatus")).toHaveText("Queue session ready");
   await fresh.context.setOffline(false);
   await manager.reload();
@@ -114,6 +128,10 @@ try {
   await manager.locator("#staffForm button").click();
   await expect(manager.locator("#message")).toContainText("Registered Setup Staff");
   await expect(manager.locator("#firstUseNext")).toHaveText("Next: add a window, then ask staff to choose it on Start Shift.", { timeout: 20000 });
+  await expect(manager.locator('#firstUseSteps [data-step="staff"]')).toHaveAttribute("data-state", "done");
+  await expect(manager.locator('#firstUseSteps [data-step="staff"]')).toContainText("A staff record is saved.");
+  await expect(manager.locator('#firstUseSteps [data-step="windows"]')).toHaveAttribute("data-state", "next");
+  await expect(manager.locator('#firstUseSteps [data-step="windows"]')).toHaveAttribute("aria-current", "step");
   await expect(manager.locator("#firstUseAction")).toHaveText("ADD WINDOWS");
   await manager.locator("#firstUseAction").click();
   await expect(manager.locator("#addWindowsModal")).toBeVisible();
@@ -124,9 +142,11 @@ try {
   await expect(manager.locator("#message")).toContainText("Created: Window 1.");
   await expect(manager.locator("#firstUse")).toHaveAttribute("data-setup", "complete", { timeout: 20000 });
   await expect(manager.locator("#firstUse")).toBeHidden();
+  await expect(manager.locator("#firstUseSteps")).toBeEmpty();
   await expect(manager.locator("#sessionStatus")).toHaveText("Queue session ready");
   await expect(manager.locator("#roster")).toContainText("Setup Staff");
   await expect(manager.locator("#windows")).toContainText("Window 1");
+  await expect(manager.locator("#windows")).toContainText("No staff assigned");
   const sessionDetail = await manager.locator("#sessionDetail").textContent();
   await manager.reload();
   await expect(manager.locator("#firstUse")).toHaveAttribute("data-setup", "complete", { timeout: 20000 });
@@ -149,6 +169,7 @@ try {
   await expect(failedPage.locator("#firstUse")).toHaveAttribute("data-setup", "unknown");
   await expect(failedPage.locator("#firstUse")).toBeHidden();
   await expect(failedPage.locator("#firstUseNext")).toHaveText("");
+  await expect(failedPage.locator("#firstUseSteps")).toBeEmpty();
   console.log("PASS unavailable setup reads stay unknown");
   assert.deepEqual(errors, []);
 } finally {

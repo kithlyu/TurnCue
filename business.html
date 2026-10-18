@@ -9,6 +9,16 @@
     #addWindowsModal { width: min(460px, calc(100% - 32px)); max-height: calc(100% - 32px); overflow: auto; margin: auto; padding: 28px; border: 0; border-radius: 20px; box-shadow: 0 16px 64px #0005; }
     #addWindowsModal::backdrop { background: #0009; }
     #windowCreateStatus:empty { display: none; }
+    #firstUseIntro { margin-top: 0; }
+    #firstUseSteps { list-style: none; margin: 8px 0 0; padding: 0; }
+    #firstUseSteps li { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-top: 1px solid #eee; }
+    #firstUseSteps li > div { flex: 1 1 auto; min-width: 0; }
+    #firstUseSteps li.is-next { margin-top: 8px; padding: 12px; border-top: 0; border-radius: 12px; background: #f4f7f5; box-shadow: inset 3px 0 0 #1f1f1f; }
+    #firstUseSteps li.is-done .step-mark { color: #24633a; }
+    #firstUseSteps li.is-later { color: #555; }
+    #firstUseSteps .step-mark { flex: 0 0 4.25rem; font-size: 12px; font-weight: bold; letter-spacing: .04em; text-transform: uppercase; padding-top: 4px; }
+    #firstUseSteps p { margin: 2px 0 0; }
+    #firstUseSteps .actions { margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -23,7 +33,9 @@
   <p id="freshnessNotice" class="notice" role="status"></p>
   <section id="actionChecks" role="status"></section>
   <section id="firstUse" class="card" hidden data-setup="unknown" aria-labelledby="firstUseTitle">
-    <h2 id="firstUseTitle">Finish setup</h2>
+    <h2 id="firstUseTitle">Set up your queue</h2>
+    <p id="firstUseIntro">Work through these steps. A finished step means the record is saved. It does not mean someone has started a shift.</p>
+    <ol id="firstUseSteps" aria-label="Setup steps"></ol>
     <p id="firstUseNext" aria-live="polite"></p>
     <div id="firstUseActions" class="actions" hidden><button id="firstUseAction" type="button"></button></div>
   </section>
@@ -153,12 +165,35 @@ function managerSetup() {
 function renderFirstUse() {
   const result = managerSetup();
   const host = $("firstUse");
+  const list = $("firstUseSteps");
+  const actions = $("firstUseActions");
+  host.append(actions);
   host.dataset.setup = result.status;
   host.hidden = result.status !== "incomplete";
+  list.replaceChildren();
+  $("firstUseNext").textContent = "";
+  actions.hidden = true;
+  $("firstUseAction").textContent = "";
+  $("firstUseAction").disabled = true;
+  if (result.status !== "incomplete") return;
   $("firstUseNext").textContent = result.next;
-  $("firstUseActions").hidden = result.action === null;
+  let nextItem = null;
+  for (const step of result.steps) {
+    const item = element("li");
+    item.dataset.step = step.id;
+    item.dataset.state = step.state;
+    item.className = "is-" + step.state;
+    if (step.state === "next") { item.setAttribute("aria-current", "step"); nextItem = item; }
+    const body = element("div");
+    body.append(element("strong", step.label), element("p", step.detail, "muted"));
+    item.append(element("span", step.state === "done" ? "Done" : step.state === "next" ? "Next" : "To do", "step-mark"), body);
+    list.append(item);
+  }
+  const actionable = result.action !== null;
   $("firstUseAction").textContent = result.actionLabel;
-  $("firstUseAction").disabled = busy || !operational() || result.action === null;
+  $("firstUseAction").disabled = !actionable || busy || !operational();
+  actions.hidden = !actionable;
+  if (actionable && nextItem) nextItem.querySelector("div").append(actions);
 }
 function render() {
   renderFirstUse();
