@@ -8,7 +8,7 @@ import { resolveEnvironment } from "../environment.js";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const environment = resolveEnvironment({ hostname: "localhost" });
 const { host, port } = environment.emulator;
-const files = new Set(["index.html", "business.html", "staff.html", "turncue.js", "turncue.css", "environment.js", "firebase-client.js", "join-entry.js", "eta.js", "inactivity.js", "bulk-setup.js", "staff-import.js", "window-label.js", "window-operations.js"]);
+const files = new Set(["index.html", "business.html", "staff.html", "turncue.js", "turncue.css", "environment.js", "firebase-client.js", "join-entry.js", "eta.js", "inactivity.js", "bulk-setup.js", "staff-import.js", "window-label.js", "window-operations.js", "setup-status.js"]);
 
 export async function startLocalServer(portNumber = 8080) {
   const response = await fetch(`http://${host}:${port}/emulator/v1/projects/${environment.firebaseConfig.projectId}:securityRules`, {

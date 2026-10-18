@@ -65,11 +65,11 @@ This intentionally tests missing Java, absent emulator, and occupied-port refusa
 
 | Category | Files | Status |
 | --- | --- | --- |
-| Pure/unit | `eta`, `eta-hardening`, `inactivity`, `bulk-setup`, `staff-import` | Fast + release |
+| Pure/unit | `eta`, `eta-hardening`, `inactivity`, `bulk-setup`, `staff-import`, `setup-status` | Fast + release |
 | Source/environment | `inactivity-ui`, `environment`, `network-guard` | Fast + release; source checks are not browser interaction tests |
 | Emulator/integration | `window-operations`, `retired-windows`, `window-label-immutability`, `window-label-uniqueness` | Integration + release |
 | Inactivity integration | `inactivity-release` | Full serial state/expiry checks + concurrent start in release |
-| Browser | `environment-browser`, `batch3-browser` | Browser + release |
+| Browser | `environment-browser`, `batch3-browser`, `setup-status-browser` | Browser + release |
 | Concurrency | `concurrency join`, `concurrency call`, `inactivity-release --concurrent-only` | Concurrency + release (full inactivity run includes concurrent start once) |
 | Rules | `rules` | Rules + release; other emulator suites also compile current rules |
 | Runner safety | `runner-safety` | Focused infrastructure verification, separate from product release checks |

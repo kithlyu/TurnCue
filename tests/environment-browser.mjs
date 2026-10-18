@@ -75,6 +75,10 @@ try {
     await page.goto(origin + "/" + file);
     await page.locator("#environmentError").waitFor();
     assert.match(await page.locator("#environmentError").textContent(), /emulator unavailable.*Production fallback is disabled/);
+    if (file === "business.html") {
+      assert.equal(await page.locator("#firstUse").getAttribute("data-setup"), "unknown");
+      assert.equal(await page.locator("#firstUse").isHidden(), true);
+    }
   }
   await offline.close();
   assert.deepEqual(errors, []);

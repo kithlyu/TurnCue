@@ -22,6 +22,11 @@
   <div id="message" class="card" role="status" aria-live="polite"></div>
   <p id="freshnessNotice" class="notice" role="status"></p>
   <section id="actionChecks" role="status"></section>
+  <section id="firstUse" class="card" hidden data-setup="unknown" aria-labelledby="firstUseTitle">
+    <h2 id="firstUseTitle">Finish setup</h2>
+    <p id="firstUseNext" aria-live="polite"></p>
+    <div id="firstUseActions" class="actions" hidden><button id="firstUseAction" type="button"></button></div>
+  </section>
   <section class="card" aria-labelledby="sessionTitle">
     <h2 id="sessionTitle">Operational session</h2>
     <div id="sessionStatus">Setting up TurnCue...</div>
@@ -83,9 +88,11 @@ import {
 import { learnPace } from "./eta.js";
 import { generateWindowLabels, labelConflicts } from "./bulk-setup.js";
 import { CSV_TEMPLATE, parseStaffCsv, createImportedStaff } from "./staff-import.js";
+import { assessManagerSetup } from "./setup-status.js";
 
 const $ = id => document.getElementById(id);
 let roster = [], windows = [], waiting = [], called = [];
+let queueRecord = null;
 let sessionId = null, busy = false, stopEntries = [];
 let serviceSamples = [], inactivityTimer = null, evaluating = false;
 let bulkLabels = [];
@@ -135,7 +142,26 @@ async function perform(work, success, context = null) {
     render();
   }
 }
+function managerSetup() {
+  return assessManagerSetup({
+    serverConfirmed: freshness.confirmed(["queue", "staff", "windows"]),
+    queue: queueRecord,
+    staff: roster,
+    windows
+  });
+}
+function renderFirstUse() {
+  const result = managerSetup();
+  const host = $("firstUse");
+  host.dataset.setup = result.status;
+  host.hidden = result.status !== "incomplete";
+  $("firstUseNext").textContent = result.next;
+  $("firstUseActions").hidden = result.action === null;
+  $("firstUseAction").textContent = result.actionLabel;
+  $("firstUseAction").disabled = busy || !operational() || result.action === null;
+}
 function render() {
+  renderFirstUse();
   reconciliation.render();
   const state = freshness.state(["staff", "windows", "queue", ...(sessionId ? ["waiting", "called"] : [])]);
   $("freshnessNotice").dataset.state = state;
@@ -311,6 +337,11 @@ $("bulkWindowForm").addEventListener("submit", event => {
     return labels;
   }, labels => "Created: " + labels.map(displayWindowLabel).join(", ") + ".");
 });
+$("firstUseAction").addEventListener("click", () => {
+  const result = managerSetup();
+  if (result.action === "staff") $("staffName").focus();
+  else if (result.action === "windows" && !$("addWindows").disabled) $("addWindows").click();
+});
 render();
 try {
   await initializeTurnCue();
@@ -318,6 +349,7 @@ try {
   watchWindows(value => { windows = value; ready.windows = true; render(); }, listenError("windows"), freshness.observe("windows"));
   watchServiceSamples(value => { serviceSamples = value; render(); }, error => message("Unable to load ETA history. " + error.message, true));
   watchQueue(queue => {
+    queueRecord = queue;
     ready.queue = Boolean(queue?.currentSessionId);
     $("sessionStatus").textContent = ready.queue ? "Queue session ready" : "No operational session";
     $("sessionDetail").textContent = queue?.currentSessionId ? "Operational session: " + queue.currentSessionId : "Reload the manager page to initialize.";
