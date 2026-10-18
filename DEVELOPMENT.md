@@ -6,7 +6,7 @@ Navigation: [README](README.md) · [Architecture](docs/ARCHITECTURE.md) · [Rele
 
 ## Current Checkpoint / Batch 4
 
-October 5, 2026. Release-suite handoff, October 17, 2026: the full release suite passed after the verified `confirm_present` and `staff_need_more_time` reconciliation slices. Pre-commit review is complete. Staging and the commit are waiting for explicit approval. Read the active handoff section below before any further Batch 4 release work.
+October 5, 2026. Batch 4 was operationally released on 2026-10-17 America/Los_Angeles. The release record is in Release history below.
 
 Batch 4 established resilient customer, staff, and manager workflows around ticket recovery, connectivity, uncertain actions, and window presence.
 
@@ -212,7 +212,7 @@ Focused run: `npm run test:browser -- staff-action-reconciliation-browser`. Resu
 
 ### Exact next action
 
-Pre-commit review of this working tree is complete. The tree is the Batch 4 foundation, including both verified reconciliation proofs and the test-only reconciliation diagnostics. It is ready for Kit to approve staging and the commit. Do not stage, commit, push, deploy, publish, or release until that approval. Do not fold the two reconciliation proofs together. Do not handle the opposite mixed view unless a separate approval says so. Do not weaken the pointer guard. Do not remove the test-only diagnostics.
+Batch 4 closure records are complete for the deployed commit below. The annotated tag is local until a push is separately approved. 4F-4D remains deferred. Do not fold the two reconciliation proofs together, handle the opposite mixed view, weaken the pointer guard, or remove the test-only diagnostics without a separate approval.
 
 ## Branches
 
@@ -245,9 +245,20 @@ Keep a small append-only release ledger **in this section** for now; no separate
 
 | Release tag | Full release commit hash | Release date (YYYY-MM-DD, timezone) | Frontend deployment status | Rules deployment status |
 | --- | --- | --- | --- | --- |
+| v0.4.0 | 9eece7d6f79c3503e9420dab1c6039f9509143ec | 2026-10-17, America/Los_Angeles | deployed and verified 2026-10-17 | deployed and verified 2026-10-17 |
 
 For each component, record `deployed and verified` with its deployment date, or `unchanged from <release/commit>` after confirming it matches the release source. Record partial/pending deployment explicitly; never mark it complete merely because code was merged. For a retrospective entry, distinguish the actual release date from the later tag-creation date in a short note. If a historical value cannot be verified, mark it unknown rather than inventing it.
 
 Batch 3 is reported released and production smoke tested at `b3b08809a2b8f4e0ff3d1fac672c8b63683ec688`. This ledger is intentionally incomplete until deployment dates/status evidence and the smoke-test record are recorded through review. No historical tag or release date is implied; `v0.3.0` remains proposed. Do not infer missing evidence from the commit date.
 
-The accepted engineering foundation is still local and uncommitted. Include the consistent, currently untracked `AGENTS.md` in the eventual explicitly approved foundation Git checkpoint. Review and approve that checkpoint separately; a reviewed commit records the work but does not publish it. An approved push to `main` triggers Pages, whose success must then be verified. Rules deployment, if needed, requires separate approval and verification under the release checklist.
+Batch 4 release note. Tag `v0.4.0` points at the deployed `main` commit `9eece7d6f79c3503e9420dab1c6039f9509143ec` (`chore: normalize AVA.md encoding`). That commit contains the Batch 4 product commit `973d3d44602685e78dbe73968b74144c884dad58`. `firestore.rules` is identical in both commits. Rules SHA256 prefix `7092dd618bd9`.
+
+Frontend: GitHub Pages deployed and verified from `9eece7d6f79c3503e9420dab1c6039f9509143ec` on 2026-10-17 America/Los_Angeles. Pages run `39098506872`.
+
+Rules: deployed and verified to Firebase project `turncue-83e1a` on 2026-10-17 America/Los_Angeles with `firebase deploy --only firestore:rules`. Indexes were not deployed by that command. The two Batch 4 `entries` composites, `status` + `ticketNumber` and `status` + `queueOrder` + `ticketNumber`, were already Enabled. Existing indexes were unchanged.
+
+Release suite: `npm.cmd run test:release` passed all 35 tests on 2026-10-17. Log `.test-output/emulator-release-1792296292667.log`.
+
+Production smoke: 12 of 12 steps passed on 2026-10-17 against the published pages and pilot test participants. A120 remains `completed`. Smoke ticket A121 was then removed from the active queue as `left_queue`, and Test Staff One's Window 2 shift was ended. John Cruz's Window 1 shift was unchanged. No active smoke ticket remains.
+
+Limitations: this production smoke did not exercise inactivity auto-pause or close/reopen of an unassigned window. `v0.3.0` remains proposed and is not part of this row. The tag records the release and does not deploy anything. Pushing the tag requires a separate approval.

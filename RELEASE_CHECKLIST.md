@@ -45,13 +45,18 @@ Run only with explicit approval for the live test and its operational writes. Us
 - [ ] Manager, staff, and customer remain synchronized throughout the call/completion cycle.
 - [ ] If relevant to the release, close/reopen an unassigned window and verify expected availability and assignment guards.
 - [ ] If inactivity behavior changed, spot-check confirmation and expired-check auto-pause with retained ownership, plus the occupied-window/empty-queue safeguards. Keep a manager/staff page open: this remains a best-effort browser safeguard, not a server watchdog.
-- [ ] Record pass/fail, test date, and any limitations. Do not mark the release complete while a major flow or compatibility failure is unresolved.
+- [x] Record pass/fail, test date, and any limitations. Do not mark the release complete while a major flow or compatibility failure is unresolved.
+
+Batch 4 production smoke passed 12 of 12 steps on 2026-10-17 America/Los_Angeles. The 35-test release suite had passed the same day. Inactivity auto-pause and unassigned-window close/reopen were not part of this production smoke.
 
 ## 6. Release record
 
-- [ ] Append the release row to the ledger in [DEVELOPMENT.md](DEVELOPMENT.md): tag (or `pending` until authorized and created), full commit hash, release date/timezone, frontend deployment status, and rules deployment status.
-- [ ] Add the production smoke-test result/date and any limitations as an adjacent note. Distinguish deployed-and-verified, unchanged, and partial/pending statuses.
-- [ ] Create/publish an annotated release tag only with explicit authorization, after applicable deployments and smoke checks pass, following the tag convention in `DEVELOPMENT.md`.
+- [x] Append the release row to the ledger in [DEVELOPMENT.md](DEVELOPMENT.md): tag (or `pending` until authorized and created), full commit hash, release date/timezone, frontend deployment status, and rules deployment status.
+- [x] Add the production smoke-test result/date and any limitations as an adjacent note. Distinguish deployed-and-verified, unchanged, and partial/pending statuses.
+- [x] Create the annotated release tag with explicit authorization after applicable deployments and smoke checks pass.
+- [ ] Push/publish the annotated release tag only with separate explicit authorization.
+
+Batch 4 record: local annotated tag `v0.4.0` at `9eece7d6f79c3503e9420dab1c6039f9509143ec`. Frontend and rules are both `deployed and verified` on 2026-10-17 America/Los_Angeles. The tag has not been pushed.
 
 ## 7. Rollback consideration triggers
 
