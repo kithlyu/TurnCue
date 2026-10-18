@@ -56,7 +56,7 @@ Batch 4 production smoke passed 12 of 12 steps on 2026-10-17 America/Los_Angeles
 - [x] Create the annotated release tag with explicit authorization after applicable deployments and smoke checks pass.
 - [ ] Push/publish the annotated release tag only with separate explicit authorization.
 
-Batch 4 record: local annotated tag `v0.4.0` at `9eece7d6f79c3503e9420dab1c6039f9509143ec`. Frontend and rules are both `deployed and verified` on 2026-10-17 America/Los_Angeles. The tag has not been pushed.
+Batch 4 record: remote annotated tag `v0.4.0` points to `9eece7d6f79c3503e9420dab1c6039f9509143ec`. The approved annotation is preserved. Frontend and rules are both `deployed and verified` on 2026-10-17 America/Los_Angeles. Batch 4 is formally closed.
 
 ## 7. Rollback consideration triggers
 
