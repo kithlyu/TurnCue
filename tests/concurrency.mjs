@@ -150,6 +150,7 @@ async function run() {
   const firebase = modules.get(appUrl).namespace;
   await seed("sessions/" + sessionId, openSession);
   if (mode === "join") {
+    await seed("queues/main-queue", { businessId: scope.businessId, locationId: scope.locationId, currentSessionId: sessionId });
     const joinModule = await load(path.join(root, "join-entry.js"));
     await joinModule.evaluate();
     const jobs = Array.from({ length: 6 }, (_, i) => {

@@ -19,6 +19,9 @@
     <nav><a href="business.html">Manager dashboard</a></nav>
   </header>
   <div id="message" class="card" role="status" aria-live="polite"></div>
+  <p id="freshnessNotice" class="notice" role="status"></p>
+  <p id="presenceNotice" class="notice" role="status" hidden></p>
+  <section id="actionChecks" role="status"></section>
   <section id="entry" class="card">
     <h2>Find your staff record</h2>
     <form id="entryForm">
@@ -35,6 +38,8 @@
     <h2 id="personName"></h2>
     <p id="staffDetail" class="muted"></p>
     <div id="assignment"></div>
+    <section id="assistedIssuance"></section>
+    <section id="ticketLookup"></section>
     <div class="actions"><button id="changePerson" class="secondary">CHANGE STAFF</button></div>
     <p class="notice">Changing staff or closing this page does not end your shift. Use END SHIFT to make your window available.</p>
   </section>
@@ -46,33 +51,118 @@
 </dialog>
 <script type="module">
 import { displayWindowLabel } from "./window-label.js";
-import { findStaff, startShift, changeWindowState, callNext, completeCustomer, watchPerson, watchWindows, watchQueue, watchEntries, watchServiceSamples, startInactivityCheck, resolveExpiredInactivityCheck, cancelInactivityCheckIfQueueEmpty, confirmInactivityCheck, element, actionButton } from "./turncue.js";
+import { findStaff, startShift, changeWindowState, callNext, resolveAndContinue, transitionTicket, watchEntry, watchPerson, watchWindows, watchQueue, watchEntries, watchServiceSamples, startInactivityCheck, resolveExpiredInactivityCheck, cancelInactivityCheckIfQueueEmpty, confirmInactivityCheck, element, actionButton } from "./turncue.js";
 import { learnPace } from "./eta.js";
+import { serviceTiming, clockText } from "./service-workflow.js";
+import { assistedTicketControls } from "./assisted-ticket-ui.js";
+import { ticketLookupControls } from "./ticket-lookup-ui.js";
+import { operationalFreshness, captureAction, actionReconciliation, staffPresence, windowPresenceState, windowPresenceText } from "./turncue.js";
 const $ = id => document.getElementById(id);
 let candidate = null, person = null, windows = [], sessionId = null, waiting = [], serviceSamples = [], inactivityTimer = null, evaluating = false, stopWaiting = null;
 let busy = false, choosing = false, selectedWindowId = "", stopPerson = null;
 let windowsReady = false, personReady = false, queueReady = false;
+let activeTicket = null, ticketKey = "", stopTicket = null, serviceTicker = null;
+const freshness = operationalFreshness(render);
+const reconciliation = actionReconciliation($("actionChecks"), render, state => {
+  if (state.window) windows = windows.map(value => value.id === state.window.id ? state.window : value);
+  if (state.person?.id === person?.id) person = state.person;
+  if (state.queue.currentSessionId === sessionId && state.assigned && state.assigned.calledByStaffId === person?.id) activeTicket = state.assigned;
+  message(state.outcome);
+});
+const assignmentFresh = () => freshness.confirmed(["person", "windows"]);
+const callFresh = () => assignmentFresh() && freshness.confirmed(["queue", "waiting"]);
+const presence = staffPresence(() => {
+  const window = windows.find(value => value.id === person?.currentWindowId);
+  return personReady && windowsReady && person?.active && window?.currentStaffId === person.id
+    && window.currentShiftId === person.currentShiftId && ["active", "paused"].includes(window.state)
+    ? { windowId: window.id, staffId: person.id, shiftId: person.currentShiftId } : null;
+}, assignmentFresh);
+window.addEventListener("pagehide", () => presence.stop());
+let presenceViewKey = "", presenceInterrupted = false, interruptedPresenceAt = null, restoredPresenceAt = null, presenceWindowMetadata = null;
+function renderPresence() {
+  const host = $("presenceNotice"), window = windows.find(value => value.id === person?.currentWindowId);
+  const owned = personReady && windowsReady && window?.currentStaffId === person?.id
+    && window?.currentShiftId && window.currentShiftId === person?.currentShiftId;
+  host.hidden = !owned;
+  if (!owned) { presenceViewKey = ""; presenceInterrupted = false; interruptedPresenceAt = null; restoredPresenceAt = null; return; }
+  const key = [window.id, window.currentStaffId, window.currentShiftId].join(":");
+  if (key !== presenceViewKey) { presenceViewKey = key; presenceInterrupted = false; interruptedPresenceAt = null; restoredPresenceAt = null; }
+  const confirmed = assignmentFresh(), state = windowPresenceState(window), stamp = window.lastPresenceAt?.toMillis?.();
+  if (!confirmed) {
+    if (!navigator.onLine || !presenceWindowMetadata || presenceWindowMetadata.fromCache) {
+      if (!presenceInterrupted) interruptedPresenceAt = stamp;
+      presenceInterrupted = true;
+    }
+    host.dataset.state = "uncertain";
+    host.textContent = "Connection interrupted — checking... Your assignment is still here. Last known: " + windowPresenceText(window);
+    return;
+  }
+  if (state === "excluded") {
+    host.dataset.state = "excluded"; host.textContent = windowPresenceText(window); return;
+  }
+  if (state !== "valid") {
+    host.dataset.state = "checking"; host.textContent = "Checking presence... " + windowPresenceText(window); return;
+  }
+  if (presenceInterrupted && stamp === interruptedPresenceAt) {
+    host.dataset.state = "checking"; host.textContent = "Connection restored — confirming presence... Your assignment is still here."; return;
+  }
+  if (presenceInterrupted) { restoredPresenceAt = stamp; presenceInterrupted = false; }
+  const restored = restoredPresenceAt === stamp;
+  host.dataset.state = restored ? "restored" : "connected";
+  host.textContent = (restored ? "Connection restored. " : "Connected. ") + windowPresenceText(window);
+}
+function renderFreshness() {
+  const state = freshness.state(["windows", "queue", ...(person ? ["person"] : []), ...(ticketKey ? ["ticket"] : [])]);
+  $("freshnessNotice").dataset.state = state;
+  $("freshnessNotice").textContent = state === "server-confirmed" ? "Operational data is server-confirmed." : state === "stale" ? "Connection lost. Your assignment is still here. Data may be out of date." : "Trying to reconnect... Operational data may be out of date.";
+}
+const renderIssuance = assistedTicketControls($("assistedIssuance"), () => ({ sessionId, visible: Boolean(person), enabled: Boolean(personReady && person?.active && queueReady && sessionId && !busy) }));
+const renderLookup = ticketLookupControls($("ticketLookup"), () => ({ sessionId, owner: person?.id, visible: Boolean(person?.active), enabled: personReady && queueReady, waiting, windows, samples: serviceSamples }));
+function syncServiceTicket() {
+  const window = windows.find(w => w.id === person?.currentWindowId);
+  const owned = personReady && windowsReady && window?.currentShiftId === person?.currentShiftId && window?.currentStaffId === person?.id;
+  const key = owned && window.currentEntryId ? [window.currentSessionId, window.currentEntryId, window.currentCallAttemptId ?? "legacy"].join(":") : "";
+  if (key === ticketKey) return;
+  stopTicket?.(); stopTicket = null; clearInterval(serviceTicker); serviceTicker = null;
+  activeTicket = null; ticketKey = key;
+  freshness.reset("ticket");
+  if (!key) return;
+  stopTicket = watchEntry(window.currentSessionId, window.currentEntryId, value => {
+    if (ticketKey !== key) return;
+    activeTicket = value; render();
+  }, error => { if (ticketKey === key) { message(error.message, true); render(); } }, metadata => { if (ticketKey === key) freshness.observe("ticket")(metadata); });
+  serviceTicker = setInterval(updateServiceClock, 1000);
+}
+function updateServiceClock() {
+  const window = windows.find(w => w.id === person?.currentWindowId);
+  const timing = serviceTiming(activeTicket, window?.currentCallAttemptId);
+  if ($("serviceClock")) $("serviceClock").textContent = timing.active ? "Service time: " + clockText(timing.elapsedSeconds) : "Service time unavailable";
+  if ($("arrivalStatus")) $("arrivalStatus").textContent = !timing.active ? "Waiting for call timing..." : timing.arrivalDecision ? "Arrival decision: is the customer here?" : "Arrival window: " + clockText(timing.remainingSeconds);
+  if ($("arrivalDecisionActions")) $("arrivalDecisionActions").hidden = !timing.arrivalDecision;
+}
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
   $("inactivityFeedback").textContent = text;
   $("inactivityFeedback").classList.toggle("error", error);
 }
-async function perform(work, success) {
+async function perform(work, success, context = null) {
   if (busy) return;
+  if (context && reconciliation.blocked(context.windowId, context.entryId, context.sessionId)) return;
   busy = true; message("Working..."); render();
-  try { const result = await work(); message(typeof success === "function" ? success(result) : success || "Saved."); }
+  try { const response = context ? await reconciliation.run(context, work) : { value: await work() }; if (!response.uncertain) { const result = response.value; message(typeof success === "function" ? success(result) : success || "Saved."); } }
   catch (error) { console.error(error); message(error.message || "Couldn't save. Check your connection and try again.", true); }
   finally { busy = false; render(); }
 }
 function clearPerson() {
   if (stopPerson) stopPerson();
   stopPerson = null; person = null; candidate = null; personReady = false;
+  freshness.reset("person");
   choosing = false; selectedWindowId = ""; if (inactivityTimer) { clearInterval(inactivityTimer); inactivityTimer = null; } message(""); render();
 }
 async function evaluateInactivity() {
   const window = windows.find(w => w.id === person?.currentWindowId);
-  if (evaluating || !window || !sessionId || !person?.currentShiftId) return;
+  if (evaluating || !window || !sessionId || !person?.currentShiftId || !callFresh() || reconciliation.blocked(window.id)) return;
   evaluating = true; try { const learned = learnPace(serviceSamples);
     if (window.inactivityCheckState === "pending") { if (!waiting.length) await cancelInactivityCheckIfQueueEmpty(window.id, person.currentShiftId, sessionId, window.inactivityCheckId); else await resolveExpiredInactivityCheck(window.id, person.currentShiftId, sessionId, window.inactivityCheckId); }
     else if (learned.confidence !== "calibrating" && waiting.length && window.state === "active" && !window.currentEntryId) await startInactivityCheck(window.id, person.currentShiftId, sessionId, learned);
@@ -87,11 +177,18 @@ function syncInactivityModal() {
     && window.currentStaffId === person.id && window.inactivityCheckState === "pending";
   if (!pending) { if (modal.open) modal.close(); return; }
   $("inactivityPrompt").textContent = "Hi " + person.name + ", are you still at " + displayWindowLabel(window.name) + "?";
-  $("inactivityConfirm").disabled = busy;
+  $("inactivityConfirm").disabled = busy || reconciliation.blocked(window.id);
   $("inactivityConfirm").onclick = () => perform(() => confirmInactivityCheck(window.id, window.currentShiftId, window.inactivityCheckId), "Customers are waiting. Call next when ready.");
   if (!modal.open) { $("inactivityFeedback").textContent = ""; modal.showModal(); }
 }
 function render() {
+  presence.sync();
+  reconciliation.render();
+  renderFreshness();
+  renderPresence();
+  renderIssuance();
+  renderLookup();
+  syncServiceTicket();
   syncInactivityModal();
   $("entry").hidden = Boolean(candidate || person);
   $("confirmation").hidden = !candidate || Boolean(person);
@@ -134,17 +231,39 @@ function render() {
     return;
   }
   host.append(element("h3", displayWindowLabel(window.name)), element("span", window.state, "state"));
-  host.append(element("p", window.currentEntryId ? "Called: " + window.currentTicketLabel : "No customer currently called.", window.currentEntryId ? "ticket" : "muted"));
+  host.append(element("p", window.currentEntryId ? (activeTicket?.status === "in_progress" ? "Service in progress: " : "Called: ") + window.currentTicketLabel : "No customer currently called.", window.currentEntryId ? "ticket" : "muted"));
   const actions = element("div", undefined, "actions");
-  actions.append(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting."), busy || !queueReady || !sessionId || window.state !== "active" || Boolean(window.currentEntryId)));
-  if (window.currentEntryId) actions.append(actionButton("COMPLETE", () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId), "Customer completed."), busy));
+  if (!window.currentEntryId) actions.append(actionButton("CALL NEXT", () => { if (callFresh()) perform(() => callNext(window.id, window.currentShiftId, sessionId), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting.", captureAction("call", window, null, sessionId)); }, busy || !callFresh() || !queueReady || !sessionId || window.state !== "active"));
+  const ticket = activeTicket;
+  const current = ticket && ticket.id === window.currentEntryId && (ticket.callAttemptId ?? null) === (window.currentCallAttemptId ?? null);
+  if (window.currentEntryId && !current) host.append(element("p", "Loading current ticket..."));
+  if (current && ["called", "in_progress"].includes(ticket.status)) {
+    const timer = element("p"); timer.id = "serviceClock"; host.append(timer);
+    const transition = action => perform(() => transitionTicket(ticket.sessionId, ticket.id, action, window.id, window.currentShiftId, "staff", ticket.callAttemptId ?? null), action === "confirm_present" ? "Service in progress." : action === "opted_out" ? "OPTED_OUT recorded." : "Customer returned to the queue.", captureAction(action, window, ticket));
+    const paired = (outcome, after) => perform(() => resolveAndContinue(ticket.sessionId, ticket.id, window.id, window.currentShiftId, ticket.callAttemptId ?? null, outcome, after), result => result.nextTicketLabel ? "Called " + result.nextTicketLabel + "." : result.state === "paused" ? "Ticket resolved. Window paused." : "Ticket resolved. No one is waiting; call next when ready.", captureAction(outcome, window, ticket, null, after));
+    if (ticket.status === "called") {
+      const arrival = element("p"); arrival.id = "arrivalStatus"; host.append(arrival);
+      actions.append(actionButton("THEY'RE HERE", () => transition("confirm_present"), busy));
+      const decision = element("div", undefined, "actions"); decision.id = "arrivalDecisionActions";
+      decision.append(actionButton("NO SHOW & CALL NEXT", () => paired("no_show", "next"), busy), actionButton("NO SHOW & PAUSE", () => paired("no_show", "pause"), busy));
+      actions.append(decision);
+    } else {
+      actions.append(actionButton("COMPLETE & CALL NEXT", () => paired("completed", "next"), busy), actionButton("COMPLETE & PAUSE", () => paired("completed", "pause"), busy));
+      const exceptions = element("div", undefined, "actions"); exceptions.append(element("span", "Ticket Status"));
+      const canDefer = Boolean(learnPace(serviceSamples).paceMinutes) && windows.some(w => w.retired !== true && w.active && w.state === "active" && w.currentShiftId && w.currentStaffId);
+      exceptions.append(actionButton("STAFF NEED MORE TIME", () => transition("staff_need_more_time"), busy || ticket.staffNeedMoreTimeAt != null || !canDefer), actionButton("OPTED OUT", () => transition("opted_out"), busy));
+      actions.append(exceptions);
+    }
+  }
   actions.append(
-    actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause")), busy),
+    actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => { const action = window.state === "paused" ? "resume" : "pause"; if (assignmentFresh()) perform(() => changeWindowState(window.id, window.currentShiftId, action), null, captureAction(action, window, null, sessionId)); }, busy || !assignmentFresh()),
     actionButton("END SHIFT", () => {
-      if (confirm("End your shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end"), "Shift ended. The window is available.");
+      if (confirm("End your shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end"), "Shift ended. The window is available.", captureAction("end", window, null, sessionId));
     }, busy || Boolean(window.currentEntryId))
   );
+  if (reconciliation.blocked(window.id)) for (const control of actions.querySelectorAll("button")) control.disabled = true;
   host.append(actions);
+  updateServiceClock();
   if (window.currentEntryId) host.append(element("p", "Complete this customer before ending your shift. Pause keeps your window and customer assigned.", "notice"));
   syncInactivityTimer();
 }
@@ -160,10 +279,10 @@ $("confirmButton").addEventListener("click", () => perform(async () => {
   stopPerson = watchPerson(person.id, value => {
     if (!value) { clearPerson(); message("Staff record unavailable. Please ask the manager.", true); return; }
     person = value; personReady = true; render();
-  }, error => { personReady = false; console.error(error); message("Unable to load your current staff record. Check your connection and reload.", true); render(); });
+  }, error => { console.error(error); message("Unable to load your current staff record. Check your connection and reload.", true); render(); }, freshness.observe("person"));
 }, "Staff record confirmed."));
-watchWindows(value => { windows = value.filter(w => w.retired !== true); windowsReady = true; render(); }, error => { windowsReady = false; console.error(error); message("Unable to load windows. Check your connection and Firebase setup, then reload.", true); render(); });
-watchQueue(queue => { const next = queue?.currentSessionId || null; if (next !== sessionId) { if (stopWaiting) stopWaiting(); waiting = []; sessionId = next; if (sessionId) stopWaiting = watchEntries(sessionId, "waiting", value => { waiting = value; render(); }, console.warn); } queueReady = Boolean(sessionId); render(); }, error => { queueReady = false; console.error(error); message("Unable to load the operational session. Check your connection and reload.", true); render(); });
+watchWindows(value => { windows = value.filter(w => w.retired !== true); windowsReady = true; render(); }, error => { console.error(error); message("Unable to load windows. Check your connection and Firebase setup, then reload.", true); render(); }, metadata => { presenceWindowMetadata = metadata; freshness.observe("windows")(metadata); });
+watchQueue(queue => { const next = queue?.currentSessionId || null; if (next !== sessionId) { if (stopWaiting) stopWaiting(); freshness.reset("waiting"); waiting = []; sessionId = next; if (sessionId) { const scope = sessionId; stopWaiting = watchEntries(sessionId, "waiting", value => { if (scope !== sessionId) return; waiting = value; render(); }, error => { console.warn(error); render(); }, metadata => { if (scope === sessionId) freshness.observe("waiting")(metadata); }); } } queueReady = Boolean(sessionId); render(); }, error => { console.error(error); message("Unable to load the operational session. Check your connection and reload.", true); render(); }, freshness.observe("queue"));
 watchServiceSamples(value => { serviceSamples = value; render(); }, console.warn);
 render();
 </script>

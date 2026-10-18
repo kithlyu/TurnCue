@@ -204,6 +204,11 @@
 
     <div class="card">
 
+      <div id="connectionNotice" role="status" hidden>
+        <p id="connectionMessage"></p>
+        <button id="connectionRetry" class="secondary-button" type="button">Try Again</button>
+      </div>
+
       <div id="loadingScreen">
 
         <div class="bell">🔔</div>
@@ -211,6 +216,9 @@
         <div class="loading-text">
           Checking your place in line...
         </div>
+        <p id="recoveryFeedback" role="status"></p>
+        <button id="retryRecoveryButton" class="secondary-button" type="button" hidden>Try Again</button>
+        <button id="resolvePreviousJoin" class="secondary-button" type="button" hidden>Resolve previous JOIN and return home</button>
 
       </div>
 
@@ -238,6 +246,15 @@
           class="error"
         ></div>
 
+        <form id="ticketRecoveryForm" novalidate>
+          <h2>Already have a ticket?</h2>
+          <label for="recoveryTicketNumber">Ticket Number</label>
+          <input id="recoveryTicketNumber" maxlength="120" autocomplete="off" autocapitalize="characters">
+          <label for="recoveryCode">Recovery Code</label>
+          <input id="recoveryCode" maxlength="8" autocomplete="off" autocapitalize="characters" spellcheck="false">
+          <button id="recoverTicketButton" class="secondary-button" type="submit">Recover My Ticket</button>
+          <p id="ticketRecoveryError" role="status"></p>
+        </form>
       </div>
 
 
@@ -281,6 +298,24 @@
           >
             LEAVE QUEUE
           </button>
+          <button id="needMoreTimeButton" class="secondary-button" type="button" hidden>Need More Time</button>
+          <p id="needMoreTimeFeedback" role="status"></p>
+          <p id="leaveFeedback" role="status"></p>
+          <dialog id="leaveDialog" aria-labelledby="leaveTitle">
+            <h2 id="leaveTitle">Are you sure you want to leave?</h2>
+            <p>You'll lose your current place in line, but you can rejoin later.</p>
+            <button id="confirmLeaveButton" class="primary-button" type="button">I Need to Leave</button>
+            <button id="keepInLineButton" class="secondary-button" type="button">Keep Me in Line</button>
+            <button id="leaveNeedMoreTimeButton" class="secondary-button" type="button" hidden>Need More Time</button>
+          </dialog>
+          <dialog id="needMoreTimeDialog" aria-labelledby="needMoreTimeTitle">
+            <h2 id="needMoreTimeTitle">Need more time?</h2>
+            <p id="needMoreTimeExplanation"></p>
+            <p>If the queue is too short, you'll be moved to the back of the current line.</p>
+            <p><strong id="needMoreTimeCountdown" role="timer"></strong></p>
+            <button id="needMoreTimeYes" class="primary-button" type="button">Yes</button>
+            <button id="needMoreTimeCancel" class="secondary-button" type="button">Cancel</button>
+          </dialog>
 
         </div>
 
@@ -297,13 +332,15 @@
             A101
           </div>
 
-          <div class="called-title">
+          <div id="calledTitle" class="called-title">
             It's your turn!
           </div>
 
           <div id="calledDestination" class="called-text">
             Please return now.
           </div>
+          <button id="imHereButton" class="primary-button" type="button">I'm Here</button>
+          <p id="arrivalFeedback" role="status"></p>
 
         </div>
 
@@ -311,6 +348,7 @@
 
 
       <div id="completedScreen">
+        <p id="completedTicket" class="ticket-label"></p>
 
         <div class="bell">🔔</div>
 
@@ -376,6 +414,7 @@
 
 
       <div id="cancelledScreen">
+        <p id="exitTicket" class="ticket-label"></p>
 
         <div class="bell">🔔</div>
 
@@ -404,6 +443,8 @@
   <script type="module">
 import { displayWindowLabel } from "./window-label.js";
     import { joinEntry } from "./join-entry.js";
+    import { transitionTicket, requestNeedMoreTime, confirmNeedMoreTime, cancelNeedMoreTime } from "./turncue.js";
+    import { compareWaiting } from "./queue-fairness.js";
     import { estimateWait, etaCopy, createEtaTicker } from "./eta.js";
 
     import { db, environment, BUSINESS_ID, LOCATION_ID, QUEUE_ID } from "./firebase-client.js";
@@ -412,6 +453,8 @@ import { displayWindowLabel } from "./window-label.js";
     import {
       doc,
       getDoc,
+      getDocFromServer,
+      getDocsFromServer,
       collection,
       query,
       where,
@@ -425,6 +468,7 @@ import { displayWindowLabel } from "./window-label.js";
 
 
     const { entry: STORAGE_KEY, cue: CUE_STORAGE_KEY } = recoveryKeys(environment);
+    const PENDING_JOIN_KEY = environment.storagePrefix + ":pending_join";
 
     const loadingScreen =
       document.getElementById(
@@ -524,6 +568,73 @@ import { displayWindowLabel } from "./window-label.js";
 
     let currentSessionId = null;
     let myEntryId = null;
+    let recoveryPending = false;
+    let codeRecoveryBusy = false, pendingCodeRecovery = null;
+    const invalidRecoveryMessage = "We couldn't find a matching ticket. Please check your ticket number and recovery code and try again.";
+    const ticketRecoveryForm = document.getElementById("ticketRecoveryForm");
+    function recoveryFormDisabled(disabled) {
+      for (const control of ticketRecoveryForm.elements) control.disabled = disabled;
+    }
+    ticketRecoveryForm.addEventListener("submit", event => {
+      event.preventDefault();
+      if (recoveryPending || codeRecoveryBusy || getSavedEntry()) return;
+      pendingCodeRecovery = {
+        ticketLabel: document.getElementById("recoveryTicketNumber").value.trim().toUpperCase(),
+        recoveryCode: document.getElementById("recoveryCode").value.trim().toUpperCase()
+      };
+      recoverTicketByCode();
+    });
+    async function recoverTicketByCode() {
+      if (codeRecoveryBusy || !pendingCodeRecovery) return;
+      const credentials = pendingCodeRecovery;
+      codeRecoveryBusy = true; recoveryPending = true; joinButton.disabled = true;
+      recoveryFormDisabled(true);
+      document.getElementById("ticketRecoveryError").textContent = "";
+      showOnly(loadingScreen);
+      try {
+        if (!/^[A-Z0-9][A-Z0-9 -]{0,119}$/.test(credentials.ticketLabel) || !/^[A-HJ-NP-Z2-9]{8}$/.test(credentials.recoveryCode)) {
+          throw Object.assign(new Error(invalidRecoveryMessage), { code: "invalid-recovery" });
+        }
+        const queueRef = doc(db, "queues", QUEUE_ID);
+        const queue = await getDocFromServer(queueRef);
+        const sessionId = queue.data()?.currentSessionId;
+        if (!sessionId) throw Object.assign(new Error(invalidRecoveryMessage), { code: "invalid-recovery" });
+        const matches = await getDocsFromServer(query(collection(db, "sessions", sessionId, "entries"), where("ticketLabel", "==", credentials.ticketLabel), limit(2)));
+        const candidate = matches.docs[0], ticket = candidate?.data();
+        if (matches.size !== 1 || ticket.businessId !== BUSINESS_ID || ticket.locationId !== LOCATION_ID
+          || ticket.queueId !== QUEUE_ID || ticket.sessionId !== sessionId || ticket.ticketLabel !== credentials.ticketLabel
+          || ticket.recoveryCode !== credentials.recoveryCode) {
+          throw Object.assign(new Error(invalidRecoveryMessage), { code: "invalid-recovery" });
+        }
+        // Another tab may have saved a ticket while this lookup was pending.
+        if (getSavedEntry()) { pendingCodeRecovery = null; await initializeCustomerPage(); return; }
+        await restoreSavedEntry({ sessionId, entryId: candidate.id }, sessionId);
+      } catch (error) {
+        if (error.code === "invalid-recovery") {
+          pendingCodeRecovery = null; recoveryPending = false; joinButton.disabled = false;
+          document.getElementById("ticketRecoveryError").textContent = invalidRecoveryMessage;
+          showOnly(joinScreen);
+        } else {
+          recoveryError();
+          document.getElementById("recoveryFeedback").textContent = "We couldn't check your ticket right now. No new ticket was created. Try again.";
+        }
+      } finally { codeRecoveryBusy = false; recoveryFormDisabled(false); }
+    }
+    const terminalStatuses = ["completed", "no_show", "opted_out", "left_queue", "cancelled"];
+    function recoveryError() {
+      recoveryPending = true; joinButton.disabled = true;
+      showOnly(loadingScreen);
+      document.getElementById("recoveryFeedback").textContent = "We couldn't check your ticket right now. Your saved ticket has been kept. Try again.";
+      document.getElementById("retryRecoveryButton").hidden = false;
+    }
+    function unrecoverable(message) {
+      stopListeners(); clearSavedEntry(); closeLeave(); closeNeedMoreTime();
+      currentSessionId = null; myEntryId = null; entryData = null;
+      recoveryPending = false; joinButton.disabled = false;
+      errorMessage.textContent = message; showOnly(joinScreen);
+      checkConnection();
+    }
+    document.getElementById("retryRecoveryButton").onclick = () => getPendingJoin() ? runCustomerJoin(false, true) : getSavedEntry() || !pendingCodeRecovery ? initializeCustomerPage() : recoverTicketByCode();
 
     let unsubscribeQueue = null;
     let unsubscribeEntry = null;
@@ -531,6 +642,123 @@ import { displayWindowLabel } from "./window-label.js";
     let unsubscribeSamples = null;
     let waitingEntries = [], etaWindows = [], serviceSamples = [], entryData = null;
     let etaTimer = null, firstEtaWriteAttempted = false;
+    const needMoreTimeButton = document.getElementById("needMoreTimeButton");
+    const needMoreTimeDialog = document.getElementById("needMoreTimeDialog");
+    const needMoreTimeYes = document.getElementById("needMoreTimeYes");
+    const needMoreTimeCancel = document.getElementById("needMoreTimeCancel");
+    const needMoreTimeFeedback = document.getElementById("needMoreTimeFeedback");
+    let needMoreTimeProposal = null, needMoreTimeTimer = null, needMoreTimeBusy = false, needMoreTimeUsed = false;
+    const leaveDialog = document.getElementById("leaveDialog");
+    const confirmLeaveButton = document.getElementById("confirmLeaveButton");
+    const leaveAlternative = document.getElementById("leaveNeedMoreTimeButton");
+    let leaveTarget = null, leaveBusy = false;
+    let joinBusy = false, arrivalBusy = false, connectionChecking = false, listenerFailed = false;
+    let connectionEpoch = 0;
+    const confirmedSources = new Map();
+    const connectionSafe = () => navigator.onLine && confirmedSources.size > 0 && [...confirmedSources.values()].every(Boolean);
+    function renderConnection() {
+      const safe = connectionSafe();
+      const notice = document.getElementById("connectionNotice");
+      notice.dataset.state = safe ? "connected" : navigator.onLine ? "reconnecting" : "stale";
+      notice.hidden = safe;
+      document.getElementById("connectionMessage").textContent = safe ? "" : navigator.onLine
+        ? "Trying to reconnect... Your displayed information may be out of date."
+        : "Your ticket is still here. We're trying to reconnect. Displayed information may be out of date.";
+      document.getElementById("connectionRetry").disabled = !navigator.onLine || connectionChecking;
+      joinButton.disabled = !safe || joinBusy || recoveryPending || codeRecoveryBusy || Boolean(getSavedEntry()) || Boolean(getPendingJoin());
+      leaveButton.disabled = !safe || leaveBusy || entryData?.status !== "waiting";
+      confirmLeaveButton.disabled = !safe || leaveBusy || entryData?.status !== "waiting";
+      needMoreTimeButton.disabled = !safe || needMoreTimeBusy || Boolean(needMoreTimeProposal);
+      leaveAlternative.disabled = needMoreTimeButton.disabled || leaveBusy;
+      needMoreTimeYes.disabled = !safe || needMoreTimeBusy || !needMoreTimeProposal || Date.now() >= needMoreTimeProposal.expiresAt;
+      document.getElementById("imHereButton").disabled = !safe || arrivalBusy || entryData?.status !== "called";
+    }
+    function observeConnection(source, snapshot) {
+      confirmedSources.set(source, !snapshot.metadata.fromCache && !snapshot.metadata.hasPendingWrites);
+      renderConnection();
+    }
+    async function checkConnection() {
+      if (connectionChecking || !navigator.onLine) { renderConnection(); return; }
+      if (recoveryPending && getSavedEntry()) { await initializeCustomerPage(); return; }
+      if (listenerFailed && currentSessionId && myEntryId) { startListeners(); return; }
+      // Active listeners own confirmation; no polling or parallel replacement listener.
+      if (currentSessionId && myEntryId && !terminalStatuses.includes(entryData?.status)) { renderConnection(); return; }
+      const epoch = connectionEpoch;
+      connectionChecking = true; confirmedSources.clear(); confirmedSources.set("queue", false); renderConnection();
+      try {
+        await getDocFromServer(doc(db, "queues", QUEUE_ID));
+        if (epoch === connectionEpoch) confirmedSources.set("queue", true);
+      } catch (_) { /* Keep uncertainty visible; retry is explicit. */ }
+      finally { connectionChecking = false; renderConnection(); }
+    }
+    window.addEventListener("offline", () => {
+      connectionEpoch++; for (const source of confirmedSources.keys()) confirmedSources.set(source, false); renderConnection();
+    });
+    window.addEventListener("online", () => { renderConnection(); checkConnection(); });
+    document.getElementById("connectionRetry").onclick = checkConnection;
+    function closeLeave() { leaveDialog.close(); leaveTarget = null; }
+    document.getElementById("keepInLineButton").onclick = closeLeave;
+    leaveDialog.addEventListener("cancel", event => { event.preventDefault(); closeLeave(); });
+    leaveAlternative.onclick = () => {
+      if (leaveAlternative.hidden || leaveAlternative.disabled) return;
+      closeLeave(); needMoreTimeButton.click();
+    };
+
+    function closeNeedMoreTime() {
+      clearInterval(needMoreTimeTimer); needMoreTimeTimer = null;
+      needMoreTimeDialog.close();
+      const proposal = needMoreTimeProposal; needMoreTimeProposal = null;
+      return proposal;
+    }
+    function cancelCustomerProposal(expired = false) {
+      if (needMoreTimeBusy) return;
+      const proposal = closeNeedMoreTime();
+      if (expired) needMoreTimeFeedback.textContent = "Confirmation expired. Your place has not changed.";
+      if (proposal) cancelNeedMoreTime(proposal.sessionId, proposal.entryId, proposal.proposalId).catch(() => {});
+      renderEta();
+    }
+    function updateNeedMoreTimeCountdown() {
+      if (!needMoreTimeProposal) return;
+      const remaining = Math.max(0, Math.ceil((needMoreTimeProposal.expiresAt - Date.now()) / 1000));
+      document.getElementById("needMoreTimeCountdown").textContent = "Confirm in " + remaining + " seconds";
+      needMoreTimeYes.disabled = !connectionSafe() || needMoreTimeBusy || remaining === 0;
+      if (remaining === 0 && !needMoreTimeBusy) cancelCustomerProposal(true);
+    }
+    needMoreTimeButton.onclick = async () => {
+      if (!connectionSafe() || needMoreTimeBusy || needMoreTimeProposal || needMoreTimeButton.hidden || needMoreTimeButton.disabled) return;
+      closeLeave();
+      needMoreTimeBusy = true; needMoreTimeButton.disabled = true; needMoreTimeFeedback.textContent = "Checking availability...";
+      const sessionId = currentSessionId, entryId = myEntryId;
+      try {
+        const proposal = await requestNeedMoreTime(sessionId, entryId);
+        if (sessionId !== currentSessionId || entryId !== myEntryId || entryData?.status !== "waiting" || entryData.customerNeedMoreTimeAt != null) {
+          await cancelNeedMoreTime(sessionId, entryId, proposal.proposalId); return;
+        }
+        needMoreTimeProposal = { ...proposal, sessionId, entryId };
+        document.getElementById("needMoreTimeExplanation").textContent = "TurnCue will recalculate your place in line and try to give you at least ~" + Math.ceil(proposal.targetMinutes) + " more minutes.";
+        needMoreTimeFeedback.textContent = ""; needMoreTimeCancel.disabled = false;
+        needMoreTimeDialog.showModal();
+        needMoreTimeTimer = setInterval(updateNeedMoreTimeCountdown, 250);
+      } catch (error) { needMoreTimeFeedback.textContent = error.message || "Need More Time is unavailable. Your place has not changed."; }
+      finally { needMoreTimeBusy = false; updateNeedMoreTimeCountdown(); renderEta(); }
+    };
+    needMoreTimeCancel.onclick = () => cancelCustomerProposal();
+    needMoreTimeDialog.addEventListener("cancel", event => { event.preventDefault(); cancelCustomerProposal(); });
+    needMoreTimeYes.onclick = async () => {
+      if (!connectionSafe() || needMoreTimeBusy || !needMoreTimeProposal) return;
+      if (Date.now() >= needMoreTimeProposal.expiresAt) { cancelCustomerProposal(true); return; }
+      const proposal = needMoreTimeProposal;
+      needMoreTimeBusy = true; needMoreTimeYes.disabled = true; needMoreTimeCancel.disabled = true;
+      try {
+        await confirmNeedMoreTime(proposal.sessionId, proposal.entryId, proposal.proposalId);
+        needMoreTimeUsed = true;
+        needMoreTimeFeedback.textContent = "Your place has been recalculated. Need More Time has been used for this ticket.";
+      } catch (error) {
+        needMoreTimeFeedback.textContent = error.code === "eta-unavailable"
+          ? "Service estimates are unavailable now. Your place and Need More Time allowance have not changed. Try again when estimates return."
+          : error.message || "Could not confirm. Your live ticket shows your current place.";
+      } finally { closeNeedMoreTime(); needMoreTimeBusy = false; renderEta(); }
+    };
 
 
     function showOnly(screen) {
@@ -553,6 +781,7 @@ import { displayWindowLabel } from "./window-label.js";
 
       screen.style.display =
         "block";
+      renderConnection();
     }
 
 
@@ -630,8 +859,14 @@ import { displayWindowLabel } from "./window-label.js";
 
 
     async function initializeCustomerPage() {
+      stopListeners();
+      recoveryPending = true; joinButton.disabled = true;
+      document.getElementById("retryRecoveryButton").hidden = true;
+      document.getElementById("recoveryFeedback").textContent = "";
 
       showOnly(loadingScreen);
+
+      if (getPendingJoin()) { await runCustomerJoin(false); return; }
 
 
       const savedEntry =
@@ -652,12 +887,13 @@ import { displayWindowLabel } from "./window-label.js";
       }
 
 
+      recoveryPending = false; joinButton.disabled = false;
       showOnly(joinScreen);
     }
 
 
     async function restoreSavedEntry(
-      savedEntry
+      savedEntry, expectedSession = null
     ) {
 
       try {
@@ -673,24 +909,30 @@ import { displayWindowLabel } from "./window-label.js";
 
 
         const snapshot =
-          await getDoc(entryRef);
+          await getDocFromServer(entryRef);
 
 
         if (!snapshot.exists()) {
-
-          clearSavedEntry();
-
-          return false;
+          unrecoverable("Your saved ticket no longer exists. You can join the queue again.");
+          return true;
         }
 
 
         const data =
           snapshot.data();
+        if (expectedSession !== null) {
+          const queue = await getDocFromServer(doc(db, "queues", QUEUE_ID));
+          if (queue.data()?.currentSessionId !== expectedSession) {
+            pendingCodeRecovery = null; recoveryPending = false; joinButton.disabled = false;
+            document.getElementById("ticketRecoveryError").textContent = "The queue session changed. Please retry recovery for the current session.";
+            showOnly(joinScreen); return true;
+          }
+        }
 
 
         if (
           data.status === "waiting" ||
-          data.status === "called"
+          ["called", "in_progress", ...terminalStatuses].includes(data.status)
         ) {
 
           currentSessionId =
@@ -698,26 +940,26 @@ import { displayWindowLabel } from "./window-label.js";
 
           myEntryId =
             savedEntry.entryId;
+          if (expectedSession !== null) saveActiveEntry(savedEntry.sessionId, savedEntry.entryId);
+          pendingCodeRecovery = null;
 
 
-          showOnly(queueScreen);
-
-          startListeners();
+          entryData = data;
+          if (terminalStatuses.includes(data.status)) {
+            handleStatus(data);
+          } else {
+            // Stay on the restoring screen until the live ticket snapshot arrives.
+            startListeners();
+          }
 
           return true;
         }
 
 
-        /*
-          Completed and cancelled entries are not
-          restored as active queue positions.
+        // Unsupported states are not restored as active queue positions.
 
-          Their active-device marker is cleared.
-        */
-
-        clearSavedEntry();
-
-        return false;
+        unrecoverable("Your saved ticket is no longer available in the queue. You can join again.");
+        return true;
 
       } catch (error) {
 
@@ -735,127 +977,117 @@ import { displayWindowLabel } from "./window-label.js";
           problem from appearing to lose the spot.
         */
 
-        errorMessage.textContent =
-          "We couldn't check your place right now. Please try again.";
-
-        showOnly(joinScreen);
+        recoveryError();
 
         return true;
       }
     }
 
 
+    function getPendingJoin() {
+      try {
+        const raw = localStorage.getItem(PENDING_JOIN_KEY);
+        return raw ? JSON.parse(raw) : null;
+      } catch (_) { return { invalid: true }; }
+    }
+    function pendingScope(pending) {
+      return pending && pending.businessId === BUSINESS_ID && pending.locationId === LOCATION_ID
+        && pending.queueId === QUEUE_ID && typeof pending.sessionId === "string" && pending.sessionId
+        && typeof pending.entryId === "string" && pending.entryId && !pending.sessionId.includes("/") && !pending.entryId.includes("/");
+    }
+    function pendingMessage(message) {
+      recoveryPending = true; showOnly(loadingScreen);
+      document.getElementById("recoveryFeedback").textContent = message || "Checking your ticket...";
+      document.getElementById("retryRecoveryButton").hidden = false;
+    }
+    async function attachJoin(pending) {
+      saveActiveEntry(pending.sessionId, pending.entryId);
+      localStorage.removeItem(PENDING_JOIN_KEY);
+      currentSessionId = pending.sessionId; myEntryId = pending.entryId;
+      await restoreSavedEntry({ sessionId: pending.sessionId, entryId: pending.entryId });
+    }
+    async function runCustomerJoin(create = false, retry = false, clearPrevious = false) {
+      if (joinBusy) return;
+      joinBusy = true; renderConnection();
+      try {
+        if (!navigator.locks?.request) throw new Error("This browser cannot safely coordinate JOIN. Please use a supported browser.");
+        await navigator.locks.request(PENDING_JOIN_KEY, async () => {
+          let pending = getPendingJoin();
+          if (!pending) {
+            const active = getSavedEntry();
+            if (active) { await restoreSavedEntry(active); return; }
+            if (!create) return;
+            const queue = await getDocFromServer(doc(db, "queues", QUEUE_ID));
+            const sessionId = queue.data()?.currentSessionId;
+            if (!sessionId) throw new Error("There is no open queue session.");
+            pending = { businessId: BUSINESS_ID, locationId: LOCATION_ID, queueId: QUEUE_ID, sessionId, entryId: generateEntryId() };
+            try {
+              localStorage.setItem(PENDING_JOIN_KEY, JSON.stringify(pending));
+              if (localStorage.getItem(PENDING_JOIN_KEY) !== JSON.stringify(pending)) throw new Error("Storage did not retain JOIN identity.");
+            } catch (_) { throw new Error("Your browser couldn't save this JOIN safely. No ticket was requested. Please enable browser storage and try again."); }
+          }
+          pendingMessage();
+          document.getElementById("resolvePreviousJoin").hidden = true;
+          if (!pendingScope(pending)) throw new Error("Saved JOIN information cannot be validated. JOIN remains blocked.");
+          const entry = await getDocFromServer(doc(db, "sessions", pending.sessionId, "entries", pending.entryId));
+          if (entry.exists()) {
+            const value = entry.data();
+            if (value.businessId !== BUSINESS_ID || value.locationId !== LOCATION_ID || value.queueId !== QUEUE_ID || value.sessionId !== pending.sessionId) throw new Error("The original JOIN belongs to another queue.");
+            await attachJoin(pending); return;
+          }
+          const queue = await getDocFromServer(doc(db, "queues", QUEUE_ID));
+          if (queue.data()?.currentSessionId !== pending.sessionId) {
+            // The transaction's queue read fences any late creation in the old session.
+            if (clearPrevious) {
+              localStorage.removeItem(PENDING_JOIN_KEY); recoveryPending = false;
+              currentSessionId = null; myEntryId = null; entryData = null;
+              document.getElementById("resolvePreviousJoin").hidden = true;
+              showOnly(joinScreen); await checkConnection(); return;
+            }
+            pendingMessage("The queue session changed. Your previous JOIN is still being checked; no ticket was found in its original session.");
+            document.getElementById("resolvePreviousJoin").hidden = false; return;
+          }
+          if (!create && !retry) { pendingMessage("No ticket was found yet. Try Again retries your original JOIN without creating another identity."); return; }
+          try {
+            await joinEntry(db, pending);
+          } catch (_) {
+            // A rejected acknowledgement does not prove that the commit failed.
+            const result = await getDocFromServer(doc(db, "sessions", pending.sessionId, "entries", pending.entryId));
+            if (!result.exists()) { pendingMessage("We couldn't confirm your JOIN. Try Again checks and retries the same ticket request."); return; }
+            const value = result.data();
+            if (value.businessId !== BUSINESS_ID || value.locationId !== LOCATION_ID || value.queueId !== QUEUE_ID || value.sessionId !== pending.sessionId) throw new Error("The original JOIN belongs to another queue.");
+          }
+          await attachJoin(pending);
+        });
+      } catch (error) {
+        if (getPendingJoin()) pendingMessage(error.message || "We couldn't check your ticket. Your original JOIN request has been kept.");
+        else { recoveryPending = false; errorMessage.textContent = error.message; showOnly(joinScreen); }
+      } finally { joinBusy = false; renderConnection(); }
+    }
+    document.getElementById("resolvePreviousJoin").onclick = () => runCustomerJoin(false, false, true);
+    window.addEventListener("storage", event => {
+      if ([PENDING_JOIN_KEY, STORAGE_KEY].includes(event.key)) {
+        renderConnection();
+        if (!joinBusy && !myEntryId) initializeCustomerPage();
+      }
+    });
+
     joinButton.addEventListener(
       "click",
       async () => {
+        if (!connectionSafe() || joinBusy || recoveryPending || getSavedEntry()) return;
+        await runCustomerJoin(true);
 
-        joinButton.disabled =
-          true;
-
-        joinButton.textContent =
-          "JOINING...";
-
-        errorMessage.textContent =
-          "";
-
-
-        try {
-
-          /*
-            First find the queue's current
-            operational session.
-          */
-
-          const queueRef =
-            doc(
-              db,
-              "queues",
-              QUEUE_ID
-            );
-
-
-          const queueSnapshot =
-            await getDoc(queueRef);
-
-
-          if (!queueSnapshot.exists()) {
-
-            throw new Error(
-              "Queue has not been set up yet."
-            );
-          }
-
-
-          const queueData =
-            queueSnapshot.data();
-
-
-          if (
-            !queueData.currentSessionId
-          ) {
-
-            throw new Error(
-              "There is no open queue session."
-            );
-          }
-
-
-          currentSessionId =
-            queueData.currentSessionId;
-
-
-          const newEntryId = generateEntryId();
-
-          await joinEntry(db, {
-            businessId: BUSINESS_ID,
-            locationId: LOCATION_ID,
-            queueId: QUEUE_ID,
-            sessionId: currentSessionId,
-            entryId: newEntryId
-          });
-          myEntryId =
-            newEntryId;
-
-
-          /*
-            Save immediately after successful
-            Firestore creation.
-          */
-
-          saveActiveEntry(
-            currentSessionId,
-            myEntryId
-          );
-
-
-          showOnly(queueScreen);
-
-          startListeners();
-
-        } catch (error) {
-
-          console.error(
-            "Join queue error:",
-            error
-          );
-
-
-          errorMessage.textContent =
-            error.message ||
-            "Something went wrong. Please try again.";
-
-
-          joinButton.disabled =
-            false;
-
-          joinButton.textContent =
-            "JOIN QUEUE";
-        }
       }
     );
 
 
     function startListeners() {
+      const listenerSession = currentSessionId, listenerEntry = myEntryId;
+      connectionEpoch++; listenerFailed = false;
+      confirmedSources.clear();
+      for (const source of ["waiting", "ticket", "windows", "samples"]) confirmedSources.set(source, false);
+      renderConnection();
 
       if (
         !currentSessionId ||
@@ -904,11 +1136,15 @@ import { displayWindowLabel } from "./window-label.js";
         onSnapshot(
 
           queueQuery,
+          { includeMetadataChanges: true },
 
           (snapshot) => {
+            if (listenerSession !== currentSessionId || listenerEntry !== myEntryId) return;
+            observeConnection("waiting", snapshot);
 
+            waitingEntries = snapshot.docs.map(customer => ({ id: customer.id, ...customer.data() })).sort(compareWaiting);
             const myIndex =
-              snapshot.docs.findIndex(
+              waitingEntries.findIndex(
                 customer =>
                   customer.id ===
                   myEntryId
@@ -918,7 +1154,6 @@ import { displayWindowLabel } from "./window-label.js";
             if (myIndex === -1) {
               return;
             }
-            waitingEntries = snapshot.docs.map(customer => ({ id: customer.id, ...customer.data() }));
 
 
             const myPosition =
@@ -951,6 +1186,7 @@ import { displayWindowLabel } from "./window-label.js";
           },
 
           (error) => {
+            listenerFailed = true; confirmedSources.set("waiting", false); renderConnection();
 
             console.error(
               "Queue listener error:",
@@ -974,10 +1210,14 @@ import { displayWindowLabel } from "./window-label.js";
         onSnapshot(
 
           myEntryRef,
+          { includeMetadataChanges: true },
 
           (snapshot) => {
-
+            if (listenerSession !== currentSessionId || listenerEntry !== myEntryId) return;
+            observeConnection("ticket", snapshot);
+            if (recoveryPending && snapshot.metadata.fromCache) return;
             if (!snapshot.exists()) {
+              if (!snapshot.metadata.fromCache) unrecoverable("Your saved ticket no longer exists. You can join again.");
               return;
             }
 
@@ -1007,20 +1247,51 @@ import { displayWindowLabel } from "./window-label.js";
               "Entry listener error:",
               error
             );
+            listenerFailed = true; confirmedSources.set("ticket", false); renderConnection();
+            if (recoveryPending) { stopListeners(); recoveryError(); }
           }
         );
-      unsubscribeWindows = onSnapshot(query(collection(db, "windows"), where("queueId", "==", QUEUE_ID)), snapshot => {
+      const resourceError = source => () => { listenerFailed = true; confirmedSources.set(source, false); renderConnection(); };
+      unsubscribeWindows = onSnapshot(query(collection(db, "windows"), where("queueId", "==", QUEUE_ID)), { includeMetadataChanges: true }, snapshot => {
+        if (listenerSession !== currentSessionId || listenerEntry !== myEntryId) return;
+        observeConnection("windows", snapshot);
         etaWindows = snapshot.docs.map(window => ({ id: window.id, ...window.data() }));
         renderEta();
-      });
-      unsubscribeSamples = onSnapshot(query(collection(db, "queues", QUEUE_ID, "serviceSamples"), orderBy("recordedAt", "desc"), limit(40)), snapshot => {
+      }, resourceError("windows"));
+      unsubscribeSamples = onSnapshot(query(collection(db, "queues", QUEUE_ID, "serviceSamples"), orderBy("recordedAt", "desc"), limit(40)), { includeMetadataChanges: true }, snapshot => {
+        if (listenerSession !== currentSessionId || listenerEntry !== myEntryId) return;
+        observeConnection("samples", snapshot);
         serviceSamples = snapshot.docs.map(sample => sample.data()).reverse();
         renderEta();
-      });
+      }, resourceError("samples"));
     }
 
 
     function handleStatus(data) {
+      recoveryPending = false;
+      if (data.status !== "waiting") closeLeave();
+      if (data.status !== "waiting" || data.customerNeedMoreTimeAt != null) {
+        needMoreTimeButton.hidden = true;
+        if (needMoreTimeProposal && !needMoreTimeBusy) cancelCustomerProposal();
+      }
+      const imHere = document.getElementById("imHereButton");
+      imHere.hidden = data.status !== "called";
+      imHere.disabled = !connectionSafe() || arrivalBusy || data.status !== "called";
+      // Capture the displayed attempt; never fetch a newer token for a late click.
+      const arrivalSession = currentSessionId, arrivalEntry = myEntryId;
+      imHere.onclick = async () => {
+        if (!connectionSafe() || imHere.disabled || arrivalBusy) return;
+        arrivalBusy = true;
+        imHere.disabled = true;
+        document.getElementById("arrivalFeedback").textContent = "Confirming...";
+        try {
+          await transitionTicket(arrivalSession, arrivalEntry, "confirm_present", data.calledWindowId || null, data.calledByShiftId || null, "customer", data.callAttemptId ?? null);
+          document.getElementById("arrivalFeedback").textContent = "";
+        } catch (error) {
+          document.getElementById("arrivalFeedback").textContent = error.message || "Couldn't confirm. Please try again.";
+          if (entryData?.status === "called" && (entryData.callAttemptId ?? null) === (data.callAttemptId ?? null)) imHere.disabled = false;
+        } finally { arrivalBusy = false; renderConnection(); }
+      };
 
       if (
         data.status === "waiting"
@@ -1041,13 +1312,15 @@ import { displayWindowLabel } from "./window-label.js";
 
 
       if (
-        data.status === "called"
+        ["called", "in_progress"].includes(data.status)
       ) {
 
         clearEtaTimer();
 
+        document.getElementById("calledTitle").textContent = data.status === "in_progress" ? "Service in progress" : "It's your turn!";
+        document.getElementById("arrivalFeedback").textContent = "";
         document.getElementById("calledDestination").textContent =
-          data.calledWindowLabel
+          data.status === "in_progress" ? (data.calledWindowLabel ? "At " + displayWindowLabel(data.calledWindowLabel) + "." : "Your service has started.") : data.calledWindowLabel
             ? "Please proceed to " + displayWindowLabel(data.calledWindowLabel) + "."
             : "Please return now.";
 
@@ -1069,9 +1342,10 @@ import { displayWindowLabel } from "./window-label.js";
 
         clearEtaTimer();
 
-        clearSavedEntry();
+        saveActiveEntry(currentSessionId, myEntryId);
 
         calculateSummary(data);
+        document.getElementById("completedTicket").textContent = "Your ticket: " + (data.ticketLabel || "—");
 
         showOnly(
           completedScreen
@@ -1084,12 +1358,19 @@ import { displayWindowLabel } from "./window-label.js";
 
 
       if (
-        data.status === "cancelled"
+        ["cancelled", "left_queue", "no_show", "opted_out"].includes(data.status)
       ) {
 
         clearEtaTimer();
 
-        clearSavedEntry();
+        saveActiveEntry(currentSessionId, myEntryId);
+
+        cancelledScreen.querySelector(".complete-title").textContent = data.status === "no_show" ? "Ticket marked no-show" : data.status === "opted_out" ? "Service opted out" : "You've left the queue";
+        document.getElementById("exitTicket").textContent = "Your ticket: " + (data.ticketLabel || "—");
+        cancelledScreen.querySelector(".complete-text").textContent = data.status === "no_show"
+          ? "You weren't confirmed present for this call. Your ticket is no longer in line."
+          : data.status === "opted_out" ? "Service ended without completion. Your ticket is no longer in line."
+          : "Your place is no longer being held. You can rejoin later.";
 
         showOnly(
           cancelledScreen
@@ -1103,12 +1384,21 @@ import { displayWindowLabel } from "./window-label.js";
       if (!entryData || entryData.status !== "waiting") return;
       const estimate = estimateWait({ samples: serviceSamples, windows: etaWindows, waitingEntries, entryId: myEntryId });
       const copy = etaCopy(estimate);
+      needMoreTimeButton.hidden = needMoreTimeUsed || entryData.customerNeedMoreTimeAt != null
+        || !Number.isFinite(estimate.minutes) || !Number.isFinite(estimate.paceMinutes)
+        || !etaWindows.some(window => window.retired !== true && window.active && window.state === "active" && window.currentStaffId && window.currentShiftId)
+        || !waitingEntries.some(entry => entry.id === myEntryId);
+      needMoreTimeButton.disabled = needMoreTimeBusy || Boolean(needMoreTimeProposal);
+      leaveAlternative.hidden = needMoreTimeButton.hidden;
+      leaveAlternative.disabled = needMoreTimeButton.disabled || leaveBusy;
+      renderConnection();
       document.getElementById("etaStatus").innerHTML = "<strong>" + copy.title + "</strong><br>" + copy.detail;
       const cueKey = currentSessionId + ":" + myEntryId;
       if (copy.numeric && estimate.minutes <= 5 && localStorage.getItem(CUE_STORAGE_KEY) !== cueKey) {
         localStorage.setItem(CUE_STORAGE_KEY, cueKey);
         document.getElementById("getReady").hidden = false;
-      } else if (localStorage.getItem(CUE_STORAGE_KEY) === cueKey) document.getElementById("getReady").hidden = false;
+      }
+      document.getElementById("getReady").hidden = !copy.numeric || estimate.minutes > 5;
       if (copy.numeric && !entryData.firstNumericEtaShownAt && !firstEtaWriteAttempted) {
         firstEtaWriteAttempted = true;
         updateDoc(doc(db, "sessions", currentSessionId, "entries", myEntryId), { firstNumericEtaShownAt: serverTimestamp(), firstEtaLowerMinutes: copy.lower, firstEtaUpperMinutes: copy.upper, firstEtaMode: copy.mode }).catch(() => {
@@ -1125,7 +1415,13 @@ import { displayWindowLabel } from "./window-label.js";
     }
 
 
-    leaveButton.addEventListener(
+    leaveButton.onclick = () => {
+      if (!connectionSafe() || !currentSessionId || !myEntryId || entryData?.status !== "waiting" || leaveBusy || needMoreTimeBusy || needMoreTimeProposal) return;
+      leaveTarget = { sessionId: currentSessionId, entryId: myEntryId };
+      document.getElementById("leaveFeedback").textContent = "";
+      confirmLeaveButton.disabled = false; renderEta(); leaveDialog.showModal();
+    };
+    confirmLeaveButton.addEventListener(
       "click",
       async () => {
 
@@ -1137,15 +1433,9 @@ import { displayWindowLabel } from "./window-label.js";
         }
 
 
-        const confirmed =
-          window.confirm(
-            "Leave the queue? Your place will no longer be held."
-          );
-
-
-        if (!confirmed) {
-          return;
-        }
+        if (!connectionSafe() || !leaveTarget || leaveBusy) return;
+        const target = leaveTarget;
+        leaveBusy = true; confirmLeaveButton.disabled = true; leaveAlternative.disabled = true;
 
 
         leaveButton.disabled =
@@ -1154,26 +1444,8 @@ import { displayWindowLabel } from "./window-label.js";
 
         try {
 
-          const entryRef =
-            doc(
-              db,
-              "sessions",
-              currentSessionId,
-              "entries",
-              myEntryId
-            );
-
-
-          await updateDoc(
-            entryRef,
-            {
-              status:
-                "cancelled",
-
-              cancelledAt:
-                serverTimestamp()
-            }
-          );
+          await transitionTicket(target.sessionId, target.entryId, "left_queue");
+          closeLeave();
 
         } catch (error) {
 
@@ -1185,10 +1457,15 @@ import { displayWindowLabel } from "./window-label.js";
           leaveButton.disabled =
             false;
 
-          window.alert(
-            "We couldn't remove you from the queue. Please try again."
-          );
-        }
+          closeLeave();
+          document.getElementById("leaveFeedback").textContent = error.message || "Couldn't leave. Your live ticket shows your current state.";
+          try {
+            const snapshot = await getDoc(doc(db, "sessions", target.sessionId, "entries", target.entryId));
+            if (snapshot.exists() && currentSessionId === target.sessionId && myEntryId === target.entryId) {
+              entryData = snapshot.data(); handleStatus(entryData);
+            }
+          } catch (_) { /* The existing ticket listener remains authoritative. */ }
+        } finally { leaveBusy = false; confirmLeaveButton.disabled = false; renderEta(); }
       }
     );
 
@@ -1345,6 +1622,9 @@ import { displayWindowLabel } from "./window-label.js";
 
 
     function resetToHome() {
+      pendingCodeRecovery = null; recoveryFormDisabled(false); ticketRecoveryForm.reset();
+      document.getElementById("ticketRecoveryError").textContent = "";
+      recoveryPending = false;
 
       stopListeners();
 
@@ -1356,6 +1636,8 @@ import { displayWindowLabel } from "./window-label.js";
       myEntryId =
         null;
       firstEtaWriteAttempted = false;
+      closeNeedMoreTime(); needMoreTimeUsed = false; needMoreTimeFeedback.textContent = "";
+      closeLeave(); document.getElementById("leaveFeedback").textContent = "";
 
       joinButton.disabled =
         false;
@@ -1379,6 +1661,7 @@ import { displayWindowLabel } from "./window-label.js";
         "--";
 
       showOnly(joinScreen);
+      checkConnection();
     }
 
 
@@ -1395,9 +1678,9 @@ import { displayWindowLabel } from "./window-label.js";
 
 
     initializeCustomerPage();
+    checkConnection();
 
   </script>
 
 </body>
 </html>
-

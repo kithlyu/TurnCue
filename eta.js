@@ -5,6 +5,16 @@ export const MIN_CLEAN_SAMPLES = 3;
 export const STABLE_SAMPLE_COUNT = 5;
 export const OVERDUE_CUSHION_MINUTES = 2;
 export const OVERDUE_CUSHION_MAX_MINUTES = 5;
+// Presence expiry is server-validated elsewhere; never infer it from local time.
+export function windowPresenceState(window) {
+  if (!window.lastPresenceAt?.toMillis || window.presenceStaffId !== window.currentStaffId
+    || window.presenceShiftId !== window.currentShiftId) return "legacy";
+  return window.capacityExcludedAt ? "excluded" : "valid";
+}
+export function countsAsServiceCapacity(window) {
+  return Boolean(window.retired !== true && window.active && window.state === "active" && window.currentShiftId
+    && (!window.lastPresenceAt?.toMillis || windowPresenceState(window) === "valid"));
+}
 export function createEtaTicker(render, schedule = setInterval, cancel = clearInterval) {
   const id = schedule(render, 30000);
   return () => cancel(id);
@@ -46,7 +56,7 @@ export function estimateWait({ samples, windows, waitingEntries, entryId, now = 
   const learned = learnPace(samples);
   const index = waitingEntries.findIndex(entry => entry.id === entryId);
   const ahead = index < 0 ? 0 : index;
-  const active = windows.filter(window => window.retired !== true && window.active && window.state === "active" && window.currentShiftId);
+  const active = windows.filter(countsAsServiceCapacity);
   if (!active.length) return { ...learned, ahead, mode: "no_capacity", minutes: null };
   if (!learned.paceMinutes) return { ...learned, ahead, mode: "calibrating", minutes: null };
   const paceMs = learned.paceMinutes * 60000;

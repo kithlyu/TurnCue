@@ -20,12 +20,16 @@
     <p class="notice">Pilot access: this dashboard is not protected by authentication. Staff ID confirmation is not a secure sign-in. Use only with trusted pilot participants.</p>
   </header>
   <div id="message" class="card" role="status" aria-live="polite"></div>
+  <p id="freshnessNotice" class="notice" role="status"></p>
+  <section id="actionChecks" role="status"></section>
   <section class="card" aria-labelledby="sessionTitle">
     <h2 id="sessionTitle">Operational session</h2>
     <div id="sessionStatus">Setting up TurnCue...</div>
     <p id="sessionDetail" class="muted"></p>
   </section>
   <section class="card"><h2>ETA status</h2><div id="etaSummary" class="muted">Loading service pace...</div></section>
+  <section id="assistedIssuance" class="card"></section>
+  <section id="ticketLookup" class="card"></section>
   <section class="card">
     <h2>Staff roster</h2>
     <form id="staffForm">
@@ -66,6 +70,9 @@
   </form>
 </dialog>
 <script type="module">
+import { assistedTicketControls } from "./assisted-ticket-ui.js";
+import { ticketLookupControls } from "./ticket-lookup-ui.js";
+import { operationalFreshness, captureAction, actionReconciliation, windowPresenceText } from "./turncue.js";
 import { displayWindowLabel } from "./window-label.js";
 import { windowStatus, canConfigureWindow } from "./window-operations.js";
 import {
@@ -85,6 +92,20 @@ let bulkLabels = [];
 let staffImport = null, staffImportDone = false;
 const ready = { staff: false, windows: false, queue: false, waiting: false, called: false };
 const operational = () => ready.staff && ready.windows && ready.queue;
+const freshness = operationalFreshness(render);
+const reconciliation = actionReconciliation($("actionChecks"), render, state => {
+  if (state.window) windows = windows.map(value => value.id === state.window.id ? state.window : value);
+  if (state.person) roster = roster.map(value => value.id === state.person.id ? state.person : value);
+  for (const ticket of [state.original, state.assigned].filter(Boolean)) {
+    called = called.filter(value => value.id !== ticket.id || value.sessionId !== ticket.sessionId);
+    if (ticket.sessionId === sessionId && ["called", "in_progress"].includes(ticket.status)) called.push(ticket);
+  }
+  message(state.outcome);
+});
+const assignmentFresh = () => freshness.confirmed(["staff", "windows"]);
+const callFresh = () => assignmentFresh() && freshness.confirmed(["queue", "waiting"]);
+const renderIssuance = assistedTicketControls($("assistedIssuance"), () => ({ sessionId, enabled: Boolean(ready.queue && sessionId && !busy) }));
+const renderLookup = ticketLookupControls($("ticketLookup"), () => ({ sessionId, enabled: ready.queue, waiting, windows, samples: serviceSamples }));
 function message(text, error = false) {
   $("message").textContent = text;
   $("message").classList.toggle("error", error);
@@ -92,20 +113,20 @@ function message(text, error = false) {
 }
 function listenError(kind) {
   return error => {
-    ready[kind] = false;
     console.error(kind + " listener:", error);
     message("Unable to load " + kind + ". Check your connection and Firebase setup, then reload. " + error.message, true);
     render();
   };
 }
-async function perform(work, success) {
+async function perform(work, success, context = null) {
   if (busy) return;
+  if (context && reconciliation.blocked(context.windowId, context.entryId, context.sessionId)) return;
   busy = true;
   message("Working...");
   render();
   try {
-    const result = await work();
-    message(typeof success === "function" ? success(result) : success || "Saved.");
+    const response = context ? await reconciliation.run(context, work) : { value: await work() };
+    if (!response.uncertain) { const result = response.value; message(typeof success === "function" ? success(result) : success || "Saved."); }
   } catch (error) {
     console.error(error);
     message(error.message || "Couldn't save. Check your connection and try again.", true);
@@ -115,6 +136,12 @@ async function perform(work, success) {
   }
 }
 function render() {
+  reconciliation.render();
+  const state = freshness.state(["staff", "windows", "queue", ...(sessionId ? ["waiting", "called"] : [])]);
+  $("freshnessNotice").dataset.state = state;
+  $("freshnessNotice").textContent = state === "server-confirmed" ? "Operational data is server-confirmed." : state === "stale" ? "Connection lost. Displayed operational data may be out of date." : "Trying to reconnect... Operational data may be out of date.";
+  renderIssuance();
+  renderLookup();
   for (const form of [$("staffForm"), $("bulkWindowForm"), $("staffImportForm")]) {
     for (const control of form.elements) control.disabled = busy || !operational();
   }
@@ -129,9 +156,9 @@ function render() {
   syncInactivityEvaluator();
 }
 async function evaluateInactivity() {
-  if (evaluating || !operational() || !sessionId) return;
+  if (evaluating || !operational() || !sessionId || !callFresh()) return;
   evaluating = true;
-  try { const learned = learnPace(serviceSamples); for (const w of windows.filter(w => w.retired !== true && w.currentShiftId && w.active)) {
+  try { const learned = learnPace(serviceSamples); for (const w of windows.filter(w => w.retired !== true && w.currentShiftId && w.active && !reconciliation.blocked(w.id))) {
     if (w.inactivityCheckState === "pending") {
       if (!waiting.length) await cancelInactivityCheckIfQueueEmpty(w.id, w.currentShiftId, sessionId, w.inactivityCheckId);
       else await resolveExpiredInactivityCheck(w.id, w.currentShiftId, sessionId, w.inactivityCheckId);
@@ -173,23 +200,26 @@ function renderWindows() {
   if (!windows.some(w => w.retired !== true)) { host.textContent = "Add a window, then ask staff to choose it on Start Shift."; return; }
   for (const window of windows.filter(w => w.retired !== true)) {
     const card = element("div", undefined, "window");
+    card.dataset.windowId = window.id;
     const person = roster.find(p => p.id === window.currentStaffId);
     card.append(element("h3", displayWindowLabel(window.name)), element("span", windowStatus(window), "state"));
     card.append(element("p", person ? person.name + " · " + person.staffCode : window.currentStaffId ? "Loading assignee..." : "No staff assigned", "muted"));
+    const presenceLabel = element("p", (freshness.confirmed(["windows"]) ? "" : "Last known: ") + windowPresenceText(window), "notice");
+    presenceLabel.classList.add("window-presence"); card.append(presenceLabel);
     if (window.currentEntryId) card.append(element("p", "Called: " + window.currentTicketLabel, "ticket"));
     if (window.inactivityCheckState === "pending") card.append(element("p", "Inactivity check pending", "notice"));
     if (window.pauseSource === "inactivity_check" || window.reviewFlagType === "inactivity_check") card.append(element("p", "Auto-paused after no response · Manager review needed", "error"));
     const actions = element("div", undefined, "actions");
-    const disabled = busy || !operational();
+    const disabled = busy || !operational() || reconciliation.blocked(window.id);
     if (window.currentShiftId) {
       actions.append(
-        actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => perform(() => changeWindowState(window.id, window.currentShiftId, window.state === "paused" ? "resume" : "pause", "manager")), disabled),
+        actionButton(window.state === "paused" ? "RESUME" : "PAUSE", () => { const action = window.state === "paused" ? "resume" : "pause"; if (assignmentFresh()) perform(() => changeWindowState(window.id, window.currentShiftId, action, "manager"), null, captureAction(action, window, null, sessionId)); }, disabled || !assignmentFresh()),
         actionButton("END SHIFT", () => {
-          if (confirm("End " + (person?.name || "this staff member") + "'s shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end", "manager"), "Shift ended. The window is OPEN.");
+          if (confirm("End " + (person?.name || "this staff member") + "'s shift at " + displayWindowLabel(window.name) + "?")) perform(() => changeWindowState(window.id, window.currentShiftId, "end", "manager"), "Shift ended. The window is OPEN.", captureAction("end", window, null, sessionId));
         }, disabled || Boolean(window.currentEntryId))
       );
-      if (window.state === "active" && !window.currentEntryId) actions.prepend(actionButton("CALL NEXT", () => perform(() => callNext(window.id, window.currentShiftId, sessionId, "manager"), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting."), disabled || !ready.waiting || !sessionId));
-      if (window.currentEntryId) actions.prepend(actionButton("COMPLETE " + window.currentTicketLabel, () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId, "manager"), "Customer completed."), disabled));
+      if (window.state === "active" && !window.currentEntryId) actions.prepend(actionButton("CALL NEXT", () => { if (callFresh()) perform(() => callNext(window.id, window.currentShiftId, sessionId, "manager"), ticket => ticket ? "Called " + ticket + " to " + displayWindowLabel(window.name) + "." : "No one is waiting.", captureAction("call", window, null, sessionId)); }, disabled || !callFresh() || !ready.waiting || !sessionId));
+      if (window.currentEntryId) actions.prepend(actionButton("COMPLETE " + window.currentTicketLabel, () => perform(() => completeCustomer(window.currentSessionId, window.currentEntryId, window.id, window.currentShiftId, "manager", window.currentCallAttemptId ?? null), "Customer completed.", captureAction("completed", window, called.find(value => value.id === window.currentEntryId) || { id: window.currentEntryId, sessionId: window.currentSessionId, callAttemptId: window.currentCallAttemptId ?? null, status: "called" })), disabled));
     } else if (canConfigureWindow(window)) {
       actions.append(
         actionButton(window.active ? "CLOSE WINDOW" : "OPEN WINDOW", () => perform(() => saveWindow(window.id, window.name, !window.active)), disabled)
@@ -213,7 +243,7 @@ function renderEntries() {
       const info = element("div");
       info.append(element("strong", entry.ticketLabel, "ticket"), element("p", kind === "waiting" ? "Position " + (index + 1) : (entry.calledWindowLabel ? displayWindowLabel(entry.calledWindowLabel) : "Earlier Batch 1 call · no window"), "muted"));
       row.append(info);
-      if (kind === "called") row.append(actionButton("COMPLETE", () => perform(() => completeCustomer(entry.sessionId, entry.id, entry.calledWindowId || null, entry.calledByShiftId || null, "manager"), "Customer completed."), busy || !operational()));
+      if (kind === "called") row.append(actionButton("COMPLETE", () => perform(() => completeCustomer(entry.sessionId, entry.id, entry.calledWindowId || null, entry.calledByShiftId || null, "manager", entry.callAttemptId ?? null), "Customer completed.", captureAction("completed", windows.find(value => value.id === entry.calledWindowId), entry)), busy || !operational() || reconciliation.blocked(entry.calledWindowId, entry.id, entry.sessionId)));
       host.append(row);
     });
   }
@@ -284,8 +314,8 @@ $("bulkWindowForm").addEventListener("submit", event => {
 render();
 try {
   await initializeTurnCue();
-  watchStaff(value => { roster = value; ready.staff = true; render(); }, listenError("staff"));
-  watchWindows(value => { windows = value; ready.windows = true; render(); }, listenError("windows"));
+  watchStaff(value => { roster = value; ready.staff = true; render(); }, listenError("staff"), freshness.observe("staff"));
+  watchWindows(value => { windows = value; ready.windows = true; render(); }, listenError("windows"), freshness.observe("windows"));
   watchServiceSamples(value => { serviceSamples = value; render(); }, error => message("Unable to load ETA history. " + error.message, true));
   watchQueue(queue => {
     ready.queue = Boolean(queue?.currentSessionId);
@@ -297,13 +327,14 @@ try {
       stopEntries = [];
       sessionId = nextSessionId;
       waiting = []; called = []; ready.waiting = false; ready.called = false;
+      freshness.reset("waiting"); freshness.reset("called");
       if (sessionId) stopEntries = [
-        watchEntries(sessionId, "waiting", value => { waiting = value; ready.waiting = true; render(); }, listenError("waiting")),
-        watchEntries(sessionId, "called", value => { called = value; ready.called = true; render(); }, listenError("called"))
+        watchEntries(sessionId, "waiting", value => { waiting = value; ready.waiting = true; render(); }, listenError("waiting"), freshness.observe("waiting")),
+        watchEntries(sessionId, "called", value => { called = value; ready.called = true; render(); }, listenError("called"), freshness.observe("called"))
       ];
     }
     render();
-  }, listenError("queue"));
+  }, listenError("queue"), freshness.observe("queue"));
 } catch (error) {
   $("sessionStatus").textContent = "Unable to initialize TurnCue";
   message(error.message, true);

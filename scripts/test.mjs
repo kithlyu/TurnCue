@@ -6,8 +6,8 @@ import { once } from "node:events";
 import { root, toolsDir, outputDir, tooling, verifiedAsset } from "./test-tooling.mjs";
 
 const fast = ["eta", "eta-hardening", "inactivity", "inactivity-ui", "bulk-setup", "staff-import", "environment", "network-guard"];
-const integration = ["window-operations", "retired-windows", "window-label-immutability", "window-label-uniqueness"];
-const browser = ["environment-browser", "batch3-browser"];
+const integration = ["service-workflow", "queue-fairness", "ticket-lifecycle", "window-operations", "retired-windows", "window-label-immutability", "window-label-uniqueness"];
+const browser = ["presence-ux-browser", "presence-capacity-browser", "window-presence-browser", "staff-action-reconciliation-browser", "staff-connectivity-browser", "customer-join-reconciliation-browser", "customer-connectivity-browser", "ticket-lookup-browser", "customer-recovery-code-browser", "assisted-issuance-browser", "customer-recovery-browser", "customer-leave-state-browser", "customer-need-more-time-browser", "service-workflow-browser", "environment-browser", "batch3-browser"];
 const concurrency = ["concurrency join", "concurrency call", "inactivity-release --concurrent-only"];
 const groups = {
   fast, rules: ["rules"], browser, concurrency, integration,

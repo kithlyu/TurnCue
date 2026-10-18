@@ -3,7 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const files = new Set(["index.html", "business.html", "staff.html", "turncue.js", "turncue.css", "environment.js", "firebase-client.js", "join-entry.js", "eta.js", "inactivity.js", "bulk-setup.js", "staff-import.js", "window-label.js", "window-operations.js"]);
+const files = new Set(["index.html", "business.html", "staff.html", "turncue.js", "turncue.css", "environment.js", "firebase-client.js", "join-entry.js", "eta.js", "inactivity.js", "bulk-setup.js", "staff-import.js", "window-label.js", "window-operations.js", "queue-fairness.js", "service-workflow.js"]);
+files.add("assisted-ticket-ui.js");
+files.add("ticket-lookup-ui.js");
 export async function startBrowserServer(project) {
   if (!/^demo-[a-z0-9-]+$/.test(project)) throw new Error("Only demo projects allowed");
   const server = http.createServer((request, response) => {

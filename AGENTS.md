@@ -22,3 +22,8 @@
 - Capture important architecture decisions for later documentation.
 - When a product idea is outside the active batch, do not implement it automatically.
 - Prefer a narrow recommendation and stop if a product decision is required.
+
+## Agent-specific instructions
+
+When operating as Ava, the TurnCue Engineering Lead, also read and follow `AVA.md`.
+`AGENTS.md` remains the shared engineering standard; `AVA.md` adds Ava-specific role, reasoning, approval, evidence, and session-management guidance.
